@@ -1690,6 +1690,28 @@ paint_buffer_usable(void)
 }
 
 /*
+ * Release the back buffer and mark it stale.
+ * The DC must be deleted before the bitmap: DeleteObject fails on a
+ * bitmap that is still selected into a DC (which would leak one
+ * client-sized bitmap per call), while DeleteDC implicitly deselects.
+ */
+static void
+paint_buffer_drop(void)
+{
+  if (paint_buf_dc) {
+    DeleteDC(paint_buf_dc);
+    paint_buf_dc = 0;
+  }
+  if (paint_buf_bm) {
+    DeleteObject(paint_buf_bm);
+    paint_buf_bm = 0;
+  }
+  paint_buf_w = 0;
+  paint_buf_h = 0;
+  paint_buf_stale = true;
+}
+
+/*
  * Route subsequent painting via the global dc into the back buffer.
  * The global dc must hold the window target (from GetDC or BeginPaint).
  * Returns true if buffering was engaged; win_paint_buffer_end must then
@@ -1701,6 +1723,11 @@ win_paint_buffer_begin(void)
 {
   if (!paint_buffer_usable()) {
     paint_buf_stale = true;  // direct painting bypasses the buffer
+    if (!cfg.display_buffering) {
+      // free the buffer when disabled (but keep it across the dynamic
+      // bypasses, which are usually transient)
+      paint_buffer_drop();
+    }
     return false;
   }
   RECT cr;
@@ -1713,22 +1740,11 @@ win_paint_buffer_begin(void)
   }
   if (!paint_buf_dc || w != paint_buf_w || h != paint_buf_h) {
     // (re)create the buffer at the current client size
-    if (paint_buf_bm) {
-      DeleteObject(paint_buf_bm);
-      paint_buf_bm = 0;
-    }
-    if (paint_buf_dc) {
-      DeleteDC(paint_buf_dc);
-      paint_buf_dc = 0;
-    }
+    paint_buffer_drop();
     paint_buf_dc = CreateCompatibleDC(dc);
     paint_buf_bm = paint_buf_dc ? CreateCompatibleBitmap(dc, w, h) : 0;
     if (!paint_buf_bm) {
-      if (paint_buf_dc) {
-        DeleteDC(paint_buf_dc);
-        paint_buf_dc = 0;
-      }
-      paint_buf_stale = true;
+      paint_buffer_drop();
       return false;
     }
     SelectObject(paint_buf_dc, paint_buf_bm);
