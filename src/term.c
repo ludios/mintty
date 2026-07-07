@@ -3707,6 +3707,16 @@ term_paint(void)
                  // for double-width characters 
                  // (if double-width by font substitution)
                  && cs_ambig_wide
+                 // apply this only to ambiguous width chars;
+                 // checked before win_char_width because these are 
+                 // cheap pure table lookups while win_char_width 
+                 // queries the font system; this skips the font width 
+                 // enquiry for the bulk of (unambiguously wide) CJK 
+                 // cells during full-screen repaints
+                 && is_ambigwide(tchar) // is_ambig(tchar) && !is_wide(tchar)
+                 // do not widen Geometric Shapes
+                 // (Geometric Shapes Extended are not ambiguous)
+                 && !(0x25A0 <= tchar && tchar <= 0x25FF)
                  // the following restriction would be good for
                  // MS PGothic (but bad non-CJK range anyway)
                  // but bad for
@@ -3714,11 +3724,6 @@ term_paint(void)
                  // SimSun, NSimSun, Yu Gothic
                  //&& !font_ambig_wide
                  && win_char_width(xch, tattr.attr) == 1
-                 // and reassure to apply this only to ambiguous width chars
-                 && is_ambigwide(tchar) // is_ambig(tchar) && !is_wide(tchar)
-                 // do not widen Geometric Shapes
-                 // (Geometric Shapes Extended are not ambiguous)
-                 && !(0x25A0 <= tchar && tchar <= 0x25FF)
                 )
         {
           tattr.attr |= TATTR_EXPAND;
