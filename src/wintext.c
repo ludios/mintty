@@ -3580,6 +3580,22 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
   use_uniscribe = cfg.font_render == FR_UNISCRIBE && !has_rtl;
   if (combining_double)
     use_uniscribe = false;
+  if (use_uniscribe) {
+   /* Skip Uniscribe shaping for runs consisting entirely of blanks.
+      Such runs are frequent (indentation, cleared regions, line tails,
+      blanked SIXEL areas) and per-run ScriptStringAnalyse is the
+      dominant fixed cost of text output on large windows. Shaping
+      cannot alter a run of U+0020: no ligatures or fallback apply, and
+      the plain ExtTextOutW path paints the identical background fill
+      and font-based underline/strikeout for the same cell advances. */
+    bool blank_run = true;
+    for (int i = 0; i < len && blank_run; i++) {
+      blank_run = text[i] == ' ';
+    }
+    if (blank_run) {
+      use_uniscribe = false;
+    }
+  }
 #ifdef no_Uniscribe_for_ASCII_only_chunks
   // this "optimization" was intended to avoid a performance penalty 
   // for Uniscribe when there is no need for Uniscribe;
