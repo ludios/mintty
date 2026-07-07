@@ -10,6 +10,7 @@
 #include "charset.h"
 #include "child.h"
 #include "winsearch.h"
+#include "perf.h"
 #if CYGWIN_VERSION_API_MINOR >= 66
 #include <langinfo.h>
 #endif
@@ -2133,6 +2134,7 @@ disp_do_scroll(int topscroll, int botscroll, int scrolllines)
 void
 term_do_scroll(int topline, int botline, int lines, bool sb)
 {
+  mintty_perf_ensure();
   if (term.hovering) {
     term.hovering = false;
     win_update(true);
@@ -2145,10 +2147,21 @@ term_do_scroll(int topline, int botline, int lines, bool sb)
     sb = false;
   }
 
+  PERF_COUNT(scroll_calls, 1);
+  PERF_COUNT(scroll_lines, lines < 0 ? -lines : lines);
+  if (lines < 0)
+    PERF_COUNT(scroll_backward_calls, 1);
+  else
+    PERF_COUNT(scroll_forward_calls, 1);
+  if (sb)
+    PERF_COUNT(scroll_scrollback_calls, 1);
+
   if (term.lrmargmode && (term.marg_left || term.marg_right != term.cols - 1)) {
+    PERF_COUNT(scroll_lrmargin_rejects, 1);
     scroll_rect(topline, botline, lines);
     return;
   }
+  PERF_COUNT(scroll_full_width_calls, 1);
 
 #ifdef use_display_scrolling
   int scrolllines = lines;
@@ -2167,6 +2180,15 @@ term_do_scroll(int topline, int botline, int lines, bool sb)
   // Don't try to scroll more than the number of lines in the scroll region.
   int lines_in_region = botline - topline;
   lines = min(lines, lines_in_region);
+  int perf_topscroll = topline - term.disptop;
+  int perf_botscroll = min(botline - term.disptop, term.rows);
+  int perf_visible_top = max(perf_topscroll, 0);
+  int perf_visible_bot = min(perf_botscroll, term.rows);
+  int perf_visible_lines = perf_visible_bot - perf_visible_top;
+  if (perf_visible_lines > 0) {
+    PERF_COUNT(scroll_visible_calls, 1);
+    PERF_COUNT(scroll_visible_lines, min(lines, perf_visible_lines));
+  }
 
   // Number of lines that are moved up or down as they are.
   // The rest are scrolled out of the region and replaced by empty lines.
@@ -3160,6 +3182,9 @@ void
 term_paint(void)
 {
   //if (kb_trace) printf("[%ld] term_paint\n", mtime());
+  PERF_COUNT(term_paint_calls, 1);
+  PERF_COUNT(paint_lines_seen, term_allrows);
+  PERF_COUNT(paint_cells_seen, (uint64_t)term_allrows * (uint64_t)term.cols);
 
 #ifdef use_display_scrolling
   if (dispscroll_lines) {
@@ -4145,6 +4170,7 @@ term_paint(void)
     bool prev_ascii = false;  // previous char was unshaped-ASCII eligible
     bool dirty_run = (line->lattr != displine->lattr);
     bool dirty_line = dirty_run;
+    bool perf_line_dirty = dirty_line;
 #if defined(debug_dirty) && debug_dirty > 1
     printf("dirty ini %d:* lin %d run %d\n", i, dirty_line, dirty_run);
 #endif
@@ -4184,6 +4210,16 @@ term_paint(void)
 
     void out_text(int x, int y, wchar *text, int len, cattr attr, cattr *textattr, ushort lattr, char has_rtl, char has_sea)
     {
+      PERF_COUNT(paint_out_text_calls, 1);
+      PERF_COUNT(paint_out_text_chars, len);
+      if (attr.attr & TATTR_EMOJI)
+        PERF_COUNT(paint_out_text_emoji_chars, len);
+      for (int perf_i = 0; perf_i < len; perf_i++) {
+        if (text[perf_i] >= ' ' && text[perf_i] <= '~')
+          PERF_COUNT(paint_out_text_ascii_chars, 1);
+        else
+          PERF_COUNT(paint_out_text_nonascii_chars, 1);
+      }
 #ifdef debug_out_text
       wchar t[len + 1]; wcsncpy(t, text, len); t[len] = 0;
       for (int i = len - 1; i >= 0 && t[i] == ' '; i--)
@@ -4365,12 +4401,18 @@ term_paint(void)
                     || (tattr.truefg != attr.truefg)
                     || (tattr.truebg != attr.truebg)
                     || (tattr.ulcolr != attr.ulcolr);
+      if (break_run)
+        PERF_COUNT(run_breaks_attr, 1);
 
-      if (tchar != SIXELCH && (tattr.attr & TATTR_NARROW))
+      if (tchar != SIXELCH && (tattr.attr & TATTR_NARROW)) {
+        PERF_COUNT(run_breaks_narrow, 1);
         trace_run("narrow"), break_run = true;
+      }
 
-      if (tattr.attr & TATTR_EMOJI)
+      if (tattr.attr & TATTR_EMOJI) {
+        PERF_COUNT(run_breaks_emoji, 1);
         trace_run("emoji"), break_run = true;
+      }
 
       inline bool has_comb(termchar * tc)
       {
@@ -4385,8 +4427,10 @@ term_paint(void)
      /*
       * Break on both sides of any combined-character cell.
       */
-      if (has_comb(d) || (j > 0 && has_comb(&d[-1])))
+      if (has_comb(d) || (j > 0 && has_comb(&d[-1]))) {
+        PERF_COUNT(run_breaks_combining, 1);
         trace_run("cc"), break_run = true;
+      }
 
 #ifdef keep_non_BMP_characters_together_in_one_chunk
       // this was expected to speed up non-BMP display 
@@ -4408,8 +4452,10 @@ term_paint(void)
      /*
       * Break on both sides of non-BMP character.
       */
-      if (j > 0 && (is_high_surrogate(d->chr) || is_high_surrogate(d[-1].chr)))
+      if (j > 0 && (is_high_surrogate(d->chr) || is_high_surrogate(d[-1].chr))) {
+        PERF_COUNT(run_breaks_surrogate, 1);
         trace_run("bmp"), break_run = true;
+      }
 #endif
 
      /*
@@ -4420,10 +4466,14 @@ term_paint(void)
 
       if (!dirty_line) {
         if (dispchars[j].chr == tchar &&
-            (dispchars[j].attr.attr & ~DATTR_STARTRUN) == tattr.attr)
+            (dispchars[j].attr.attr & ~DATTR_STARTRUN) == tattr.attr) {
+          PERF_COUNT(run_breaks_clean_cell, 1);
           trace_run("str"), break_run = true;
-        else if (!dirty_run && textlen == 1)
+        }
+        else if (!dirty_run && textlen == 1) {
+          PERF_COUNT(run_breaks_clean_cell, 1);
           trace_run("len"), break_run = true;
+        }
       }
 
      /*
@@ -4442,8 +4492,13 @@ term_paint(void)
         break_run = false;
       }
 
-      uchar tbc = bidi_class(xtchar);
       bool tascii = tchar >= ' ' && tchar <= '~';
+      PERF_COUNT(bidi_class_calls, 1);
+      if (tascii)
+        PERF_COUNT(bidi_ascii_cells, 1);
+      else
+        PERF_COUNT(bidi_nonascii_cells, 1);
+      uchar tbc = bidi_class(xtchar);
 
      /* When ASCII is rendered without shaping (see unshaped_ascii),
       * the class-change breaks below serve no purpose between two ASCII
@@ -4458,29 +4513,42 @@ term_paint(void)
       */
       if (unshaped_ascii && textlen && tascii != prev_ascii
           && !is_comcom(tchar)
-         )
+         ) {
+        PERF_COUNT(run_breaks_ascii_boundary, 1);
         trace_run("asc"), break_run = true;
+      }
 
       if (textlen && tbc != bc) {
-        if (is_rtl_class(tbc) != is_rtl_class(bc))
+        if (is_rtl_class(tbc) != is_rtl_class(bc)) {
           // break at RTL to support RTL font fallback
+          PERF_COUNT(run_breaks_bidi, 1);
           trace_run("rtl"), break_run = true;
-        else if (unshaped_ascii && tascii && prev_ascii)
+        }
+        else if (unshaped_ascii && tascii && prev_ascii) {
           // no break between two unshaped ASCII characters (see above)
-          ;
-        else if (!is_sep_class(tbc) && !is_sep_class(bc))
+          PERF_COUNT(bidi_ascii_pair_no_breaks, 1);
+        }
+        else if (!is_sep_class(tbc) && !is_sep_class(bc)) {
           // break at other changes to avoid glyph confusion (#285)
+          PERF_COUNT(run_breaks_bidi, 1);
           trace_run("bcs"), break_run = true;
+        }
         //else if (is_punct_class(tbc) || is_punct_class(bc))
-        else if ((tbc == EN) ^ (bc == EN))
+        else if ((tbc == EN) ^ (bc == EN)) {
           // break at digit to avoid adaptation to script style
+          PERF_COUNT(run_breaks_bidi, 1);
           trace_run("bcp"), break_run = true;
+        }
       }
       bc = tbc;
       prev_ascii = tascii;
 
      /* Flush previous output chunk on break_run */
       if (break_run || cfg.bloom) {
+        if (break_run)
+          PERF_COUNT(run_breaks, 1);
+        if (cfg.bloom)
+          PERF_COUNT(run_breaks_bloom, 1);
         if ((dirty_run && textlen) || overlaying)
           out_text(start, i, text, textlen, attr, textattr, line->lattr, has_rtl, has_sea);
         start = j;
@@ -4496,6 +4564,10 @@ term_paint(void)
 
       bool do_copy =
         !termchars_equal_override(&dispchars[j], d, tchar, tattr);
+      if (do_copy) {
+        PERF_COUNT(paint_dirty_cells, 1);
+        perf_line_dirty = true;
+      }
       dirty_run |= do_copy;
 #if defined(debug_dirty) && debug_dirty > 1
       printf("dirty cop %d:%d lin %d run %d\n", i, j, dirty_line, dirty_run);
@@ -4644,6 +4716,8 @@ term_paint(void)
         * Ever.
         */
         if (!termchars_equal(&dispchars[j], d)) {
+          PERF_COUNT(paint_dirty_cells, 1);
+          perf_line_dirty = true;
           dirty_run = true;
 #if defined(debug_dirty) && debug_dirty > 1
           printf("dirty neq %d:%d lin %d run %d\n", i, j, dirty_line, dirty_run);
@@ -4659,6 +4733,8 @@ term_paint(void)
 #endif
       }
     }
+    if (!overlaying && perf_line_dirty)
+      PERF_COUNT(paint_dirty_lines, 1);
     if (dirty_run && textlen)
       out_text(start, i, text, textlen, attr, textattr, line->lattr, has_rtl, has_sea);
     if (!overlaying)
@@ -4668,6 +4744,7 @@ term_paint(void)
     * Draw any pending overlay characters in one more loop.
     */
     if (do_overlay && !overlaying) {
+      PERF_COUNT(paint_overlay_lines, 1);
       overlaying = true;
       goto overlay;
     }
@@ -4688,6 +4765,7 @@ term_paint(void)
 void
 term_invalidate(int left, int top, int right, int bottom)
 {
+  mintty_perf_ensure();
   if (left < 0)
     left = 0;
   if (top < 0)
@@ -4696,6 +4774,13 @@ term_invalidate(int left, int top, int right, int bottom)
     right = term.cols - 1;
   if (bottom >= term_allrows)
     bottom = term_allrows - 1;
+
+  PERF_COUNT(invalidate_calls, 1);
+  int perf_inv_cols = right >= left ? right - left + 1 : 0;
+  int perf_inv_rows = bottom >= top ? bottom - top + 1 : 0;
+  PERF_COUNT(invalidate_cells, (uint64_t)perf_inv_cols * (uint64_t)perf_inv_rows);
+  if (left == 0 && top == 0 && right == term.cols - 1 && bottom == term_allrows - 1)
+    PERF_COUNT(invalidate_full_calls, 1);
 
   for (int i = top; i <= bottom && i < term_allrows; i++) {
     if ((term.displines[i]->lattr & LATTR_MODE) == LATTR_NORM)

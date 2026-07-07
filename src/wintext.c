@@ -10,6 +10,7 @@
 #include "winimg.h"  // winimgs_paint
 #include "tek.h"
 #include "child.h"   // child_tty
+#include "perf.h"
 
 #include <winnls.h>
 #include <usp10.h>  // Uniscribe
@@ -1680,12 +1681,18 @@ static bool
 paint_buffer_usable(void)
 {
   if (!cfg.display_buffering || tek_mode) {
+    if (!cfg.display_buffering)
+      PERF_COUNT(buffer_reject_disabled, 1);
+    if (tek_mode)
+      PERF_COUNT(buffer_reject_tek, 1);
     return false;
   }
   if (horclip() != 0) {
+    PERF_COUNT(buffer_reject_horclip, 1);
     return false;
   }
   if (term.imgs.first) {
+    PERF_COUNT(buffer_reject_imgs, 1);
     return false;
   }
   return true;
@@ -1723,6 +1730,7 @@ paint_buffer_drop(void)
 static bool
 win_paint_buffer_begin(void)
 {
+  PERF_COUNT(buffer_begin_calls, 1);
   if (!paint_buffer_usable()) {
     paint_buf_stale = true;  // direct painting bypasses the buffer
     if (!cfg.display_buffering) {
@@ -1737,15 +1745,18 @@ win_paint_buffer_begin(void)
   int w = cr.right - cr.left;
   int h = cr.bottom - cr.top;
   if (w <= 0 || h <= 0) {
+    PERF_COUNT(buffer_reject_size, 1);
     paint_buf_stale = true;
     return false;
   }
   if (!paint_buf_dc || w != paint_buf_w || h != paint_buf_h) {
     // (re)create the buffer at the current client size
+    PERF_COUNT(buffer_recreate, 1);
     paint_buffer_drop();
     paint_buf_dc = CreateCompatibleDC(dc);
     paint_buf_bm = paint_buf_dc ? CreateCompatibleBitmap(dc, w, h) : 0;
     if (!paint_buf_bm) {
+      PERF_COUNT(buffer_reject_create, 1);
       paint_buffer_drop();
       return false;
     }
@@ -1757,6 +1768,7 @@ win_paint_buffer_begin(void)
   if (paint_buf_stale) {
     // the buffer missed painting (startup, resize, or directly painted
     // frames); force a full repaint into it before it gets blitted
+    PERF_COUNT(buffer_stale_full_repaint, 1);
     term_invalidate(0, 0, term.cols - 1, term_allrows - 1);
     paint_buf_stale = false;
   }
@@ -1767,6 +1779,7 @@ win_paint_buffer_begin(void)
   // reset the dirty row span; win_text extends it as it paints
   paint_dirty_top = term_allrows;
   paint_dirty_bot = -1;
+  PERF_COUNT(buffer_used, 1);
   return true;
 }
 
@@ -1799,7 +1812,15 @@ win_paint_buffer_end(void)
   int y = OFFSET + PADDING + top * cell_height;
   int w = cell_width  * term.cols;
   int h = cell_height * (bot - top);
+  PERF_SET(paint_dirty_top, paint_dirty_top);
+  PERF_SET(paint_dirty_bot, paint_dirty_bot);
+  PERF_COUNT(bitblt_calls, 1);
+  PERF_COUNT(bitblt_pixels, (uint64_t)w * (uint64_t)h);
+  PERF_COUNT(bitblt_width, w);
+  PERF_COUNT(bitblt_height, h);
+  long long perf_t0 = mintty_perf_ticks();
   BitBlt(dc, x, y, w, h, paint_buf_dc, x, y, SRCCOPY);
+  PERF_ADD_TICKS(bitblt_ticks, mintty_perf_ticks() - perf_t0);
 }
 
 /*
@@ -1851,12 +1872,14 @@ do_update(void)
   }
 
   update_skipped++;
-  int output_speed = lines_scrolled / (term.rows ?: cfg.rows);
+  int output_lines_scrolled = lines_scrolled;
+  int output_speed = output_lines_scrolled / (term.rows ?: cfg.rows);
   lines_scrolled = 0;
+  bool iconic = !term.detect_progress && win_is_iconic();
   if ((update_skipped < cfg.display_speedup && cfg.display_speedup < 10
        && output_speed > update_skipped
        //&& !term.smooth_scroll ?
-      ) || (!term.detect_progress && win_is_iconic())
+      ) || iconic
         //|| win_is_hidden() ?
         // suspend display update:
         //|| (update_skipped < term.suspend_update * cfg.display_speedup)
@@ -1864,17 +1887,38 @@ do_update(void)
      )
   {
     //printf("skip %d susp %d\n", update_skipped, term.suspend_update);
+    mintty_perf_note_update_skip(update_skipped, cfg.display_speedup,
+                                 output_speed, output_lines_scrolled,
+                                 iconic, term.suspend_update);
     win_set_timer(do_update, update_timer);
     return;
   }
+  int logged_update_skipped = update_skipped;
   update_skipped = 0;
   term.suspend_update = 0;
 
   update_state = UPDATE_BLOCKED;
 
+  mintty_perf_update_begin("update");
+  PERF_SET(cols, term.cols);
+  PERF_SET(rows, term.rows);
+  PERF_SET(allrows, term_allrows);
+  PERF_SET(cell_width, cell_width);
+  PERF_SET(cell_height, cell_height);
+  PERF_SET(display_speedup, cfg.display_speedup);
+  PERF_SET(display_buffering, cfg.display_buffering);
+  PERF_SET(ligatures, cfg.ligatures);
+  PERF_SET(font_render, cfg.font_render);
+  PERF_SET(output_lines_scrolled, output_lines_scrolled);
+  PERF_SET(output_speed, output_speed);
+  PERF_SET(update_skipped, logged_update_skipped);
+  PERF_SET(disptop, term.disptop);
+
   show_curchar_info('u');
 
+  long long perf_t0 = mintty_perf_ticks();
   dc = GetDC(wnd);
+  PERF_ADD_TICKS(getdc_ticks, mintty_perf_ticks() - perf_t0);
 
   // horizontal scrolling of terminal view
   int dx = - horclip();
@@ -1884,23 +1928,39 @@ do_update(void)
       SetWorldTransform(dc, &xform);
   }
 
+  perf_t0 = mintty_perf_ticks();
   win_paint_exclude_search(dc);
   term_update_search();
+  PERF_ADD_TICKS(search_ticks, mintty_perf_ticks() - perf_t0);
 
   if (tek_mode)
     tek_paint();
   else {
+    perf_t0 = mintty_perf_ticks();
     bool buffered = win_paint_buffer_begin();
+    PERF_ADD_TICKS(paint_buffer_begin_ticks, mintty_perf_ticks() - perf_t0);
+
+    perf_t0 = mintty_perf_ticks();
     term_paint();
+    PERF_ADD_TICKS(term_paint_ticks, mintty_perf_ticks() - perf_t0);
+
     if (buffered) {
+      perf_t0 = mintty_perf_ticks();
       win_paint_buffer_end();
+      PERF_ADD_TICKS(paint_buffer_end_ticks, mintty_perf_ticks() - perf_t0);
     }
+
+    perf_t0 = mintty_perf_ticks();
     winimgs_paint();
+    PERF_ADD_TICKS(winimgs_paint_ticks, mintty_perf_ticks() - perf_t0);
   }
 
+  perf_t0 = mintty_perf_ticks();
   ReleaseDC(wnd, dc);
+  PERF_ADD_TICKS(release_dc_ticks, mintty_perf_ticks() - perf_t0);
 
   // Update scrollbar
+  perf_t0 = mintty_perf_ticks();
   if (cfg.scrollbar && term.show_scrollbar && !term.app_scrollbar) {
     int lines = sblines();
     SCROLLINFO si = {
@@ -1913,11 +1973,13 @@ do_update(void)
     };
     SetScrollInfo(wnd, SB_VERT, &si, true);
   }
+  PERF_ADD_TICKS(scrollbar_ticks, mintty_perf_ticks() - perf_t0);
 
   // Update the positions of the system caret and the IME window.
   // (We maintain a caret, even though it's invisible, for the benefit of
   // blind people: apparently some helper software tracks the system caret,
   // so we should arrange to have one.)
+  perf_t0 = mintty_perf_ticks();
   if (term.has_focus) {
     int x = term.curs.x * cell_width + PADDING;
     int y = (term.curs.y - term.disptop) * cell_height + OFFSET + PADDING;
@@ -1927,9 +1989,11 @@ do_update(void)
       ImmSetCompositionWindow(imc, &cf);
     }
   }
+  PERF_ADD_TICKS(caret_ticks, mintty_perf_ticks() - perf_t0);
 
   // Schedule next update.
   win_set_timer(do_update, update_timer);
+  mintty_perf_update_end();
 }
 
 #include <math.h>
@@ -3044,6 +3108,8 @@ static bool use_uniscribe;
 static void
 text_out_start(HDC hdc, LPCWSTR psz, int cch, int *dxs)
 {
+  PERF_COUNT(text_out_start_calls, 1);
+  PERF_COUNT(text_out_start_chars, cch);
   if (cch == 0)
     use_uniscribe = false;
   if (!use_uniscribe)
@@ -3054,6 +3120,9 @@ text_out_start(HDC hdc, LPCWSTR psz, int cch, int *dxs)
 #else
   SCRIPT_CONTROL sctrl_lig = (SCRIPT_CONTROL){.fReserved = 1};
 #endif
+  PERF_COUNT(uniscribe_analyse_calls, 1);
+  PERF_COUNT(uniscribe_analyse_chars, cch);
+  long long perf_t0 = mintty_perf_ticks();
   HRESULT hr = ScriptStringAnalyse(hdc, psz, cch, 0, -1, 
     // could | SSA_FIT and use `width` (from win_text) instead of MAXLONG
     // to justify to monospace cell widths;
@@ -3061,8 +3130,11 @@ text_out_start(HDC hdc, LPCWSTR psz, int cch, int *dxs)
     SSA_GLYPHS | SSA_FALLBACK | SSA_LINK, MAXLONG, 
     cfg.ligatures > 1 ? &sctrl_lig : 0, 
     NULL, dxs, NULL, NULL, &ssa);
-  if (!SUCCEEDED(hr) && hr != USP_E_SCRIPT_NOT_IN_FONT)
+  PERF_ADD_TICKS(uniscribe_analyse_ticks, mintty_perf_ticks() - perf_t0);
+  if (!SUCCEEDED(hr) && hr != USP_E_SCRIPT_NOT_IN_FONT) {
+    PERF_COUNT(uniscribe_analyse_failures, 1);
     use_uniscribe = false;
+  }
 }
 
 static void
@@ -3079,17 +3151,29 @@ text_out(HDC hdc, int x, int y, UINT fuOptions, RECT *prc, LPCWSTR psz, int cch,
   }
 #endif
 
-  if (use_uniscribe)
+  long long perf_t0 = mintty_perf_ticks();
+  if (use_uniscribe) {
+    PERF_COUNT(script_string_out_calls, 1);
+    PERF_COUNT(script_string_out_chars, cch);
     ScriptStringOut(ssa, x, y, fuOptions, prc, 0, 0, FALSE);
-  else
+    PERF_ADD_TICKS(script_string_out_ticks, mintty_perf_ticks() - perf_t0);
+  }
+  else {
+    PERF_COUNT(ext_text_out_calls, 1);
+    PERF_COUNT(ext_text_out_chars, cch);
     ExtTextOutW(hdc, x, y, fuOptions, prc, psz, cch, dxs);
+    PERF_ADD_TICKS(ext_text_out_ticks, mintty_perf_ticks() - perf_t0);
+  }
 }
 
 static void
 text_out_end()
 {
-  if (use_uniscribe)
+  if (use_uniscribe) {
+    long long perf_t0 = mintty_perf_ticks();
     ScriptStringFree(&ssa);
+    PERF_ADD_TICKS(script_string_free_ticks, mintty_perf_ticks() - perf_t0);
+  }
 }
 
 
@@ -3405,6 +3489,24 @@ apply_attr_colour(cattr a, attr_colour_mode mode)
 void
 win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, ushort lattr, char has_rtl, char has_sea, bool clearpad, uchar phase)
 {
+  long long perf_win_text_start = mintty_perf_ticks();
+  PERF_COUNT(win_text_calls, 1);
+  PERF_COUNT(win_text_chars, len);
+  if (phase == 0)
+    PERF_COUNT(win_text_phase0_calls, 1);
+  else if (phase == 1)
+    PERF_COUNT(win_text_phase1_calls, 1);
+  else if (phase == 2)
+    PERF_COUNT(win_text_phase2_calls, 1);
+  if (clearpad)
+    PERF_COUNT(win_text_clearpad_calls, 1);
+  for (int perf_i = 0; perf_i < len; perf_i++) {
+    if (text[perf_i] >= ' ' && text[perf_i] <= '~')
+      PERF_COUNT(win_text_ascii_chars, 1);
+    else
+      PERF_COUNT(win_text_nonascii_chars, 1);
+  }
+
   if (paint_buffered) {
     // extend the dirty row span for the back buffer blit;
     // recording unconditionally can only over-extend the span
@@ -3477,8 +3579,10 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
 
  /* Only want the left half of double width lines */
   // check this before scaling up x to pixels!
-  if (lattr != LATTR_NORM && tx * 2 >= term.cols)
+  if (lattr != LATTR_NORM && tx * 2 >= term.cols) {
+    PERF_ADD_TICKS(win_text_ticks, mintty_perf_ticks() - perf_win_text_start);
     return;
+  }
 
  /* Convert to window coordinates */
   int x = tx * char_width + PADDING;
@@ -3656,9 +3760,18 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
 #endif
 
  /* With selected font, begin preparing the rendering */
+  long long perf_state_t0 = mintty_perf_ticks();
   SelectObject(dc, ff->fonts[nfont]);
+  PERF_COUNT(select_font_calls, 1);
+  PERF_ADD_TICKS(select_font_ticks, mintty_perf_ticks() - perf_state_t0);
+  perf_state_t0 = mintty_perf_ticks();
   SetTextColor(dc, fg);
+  PERF_COUNT(set_text_color_calls, 1);
+  PERF_ADD_TICKS(set_text_color_ticks, mintty_perf_ticks() - perf_state_t0);
+  perf_state_t0 = mintty_perf_ticks();
   SetBkColor(dc, bg);
+  PERF_COUNT(set_bk_color_calls, 1);
+  PERF_ADD_TICKS(set_bk_color_ticks, mintty_perf_ticks() - perf_state_t0);
 
 #define dont_debug_missing_glyphs
 #ifdef debug_missing_glyphs
@@ -3923,7 +4036,14 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
       // while avoiding CreateSolidBrush/DeleteObject GDI object churn
       // on every painted run
       SetDCBrushColor(dc, bg);
+      int perf_fill_w = box.right - box.left;
+      int perf_fill_h = box.bottom - box.top;
+      long long perf_fill_t0 = mintty_perf_ticks();
       FillRect(dc, &box, GetStockObject(DC_BRUSH));
+      PERF_COUNT(fillrect_calls, 1);
+      if (perf_fill_w > 0 && perf_fill_h > 0)
+        PERF_COUNT(fillrect_pixels, (uint64_t)perf_fill_w * (uint64_t)perf_fill_h);
+      PERF_ADD_TICKS(fillrect_ticks, mintty_perf_ticks() - perf_fill_t0);
 
       underlaid = true;
     }
@@ -5160,6 +5280,7 @@ skip_drawing:;
 
   if (coord_transformed)
     SetWorldTransform(dc, &old_xform);
+  PERF_ADD_TICKS(win_text_ticks, mintty_perf_ticks() - perf_win_text_start);
 }
 
 
@@ -5865,21 +5986,31 @@ win_char_width_uncached(xchar c, cattrflags attr)
 int
 win_char_width(xchar c, cattrflags attr)
 {
+  PERF_COUNT(wcw_calls, 1);
   if (c >= ' ' && c <= '~') {
     // ASCII fast path as in the uncached implementation;
     // keep these out of the cache
+    PERF_COUNT(wcw_ascii_fast, 1);
     return 1;
   }
   if (c > 0x10FFFF) {
     // out of Unicode range; don't let it alias another cache key
-    return win_char_width_uncached(c, attr);
+    PERF_COUNT(wcw_out_of_range, 1);
+    long long perf_t0 = mintty_perf_ticks();
+    int wid = win_char_width_uncached(c, attr);
+    PERF_ADD_TICKS(wcw_uncached_ticks, mintty_perf_ticks() - perf_t0);
+    return wid;
   }
   uint key = wcw_key(c, attr);
   int wid;
   if (wcw_lookup(key, &wid)) {
+    PERF_COUNT(wcw_cache_hits, 1);
     return wid;
   }
+  PERF_COUNT(wcw_cache_misses, 1);
+  long long perf_t0 = mintty_perf_ticks();
   wid = win_char_width_uncached(c, attr);
+  PERF_ADD_TICKS(wcw_uncached_ticks, mintty_perf_ticks() - perf_t0);
   if (wid != 0) {
     // width 0 signals a failed width enquiry; do not memoise failures,
     // so they keep being retried per call as before
@@ -6135,7 +6266,20 @@ void
 win_paint(void)
 {
   PAINTSTRUCT p;
+  mintty_perf_update_begin("paint");
+  PERF_SET(cols, term.cols);
+  PERF_SET(rows, term.rows);
+  PERF_SET(allrows, term_allrows);
+  PERF_SET(cell_width, cell_width);
+  PERF_SET(cell_height, cell_height);
+  PERF_SET(display_speedup, cfg.display_speedup);
+  PERF_SET(display_buffering, cfg.display_buffering);
+  PERF_SET(ligatures, cfg.ligatures);
+  PERF_SET(font_render, cfg.font_render);
+  PERF_SET(disptop, term.disptop);
+  long long perf_t0 = mintty_perf_ticks();
   dc = BeginPaint(wnd, &p);
+  PERF_ADD_TICKS(beginpaint_ticks, mintty_perf_ticks() - perf_t0);
 
   // better invalidate more than less; limited to text area in term_invalidate
   term_invalidate(
@@ -6150,15 +6294,27 @@ win_paint(void)
     if (tek_mode)
       tek_paint();
     else {
+      perf_t0 = mintty_perf_ticks();
       bool buffered = win_paint_buffer_begin();
+      PERF_ADD_TICKS(paint_buffer_begin_ticks, mintty_perf_ticks() - perf_t0);
+
+      perf_t0 = mintty_perf_ticks();
       term_paint();
+      PERF_ADD_TICKS(term_paint_ticks, mintty_perf_ticks() - perf_t0);
+
       if (buffered) {
+        perf_t0 = mintty_perf_ticks();
         win_paint_buffer_end();
+        PERF_ADD_TICKS(paint_buffer_end_ticks, mintty_perf_ticks() - perf_t0);
       }
+
+      perf_t0 = mintty_perf_ticks();
       winimgs_paint();
+      PERF_ADD_TICKS(winimgs_paint_ticks, mintty_perf_ticks() - perf_t0);
     }
   }
 
+  long long perf_padding_t0 = mintty_perf_ticks();
   if (// check whether no background was configured and successfully loaded
       !bgbrush_bmp &&
 #if CYGWIN_VERSION_API_MINOR >= 74
@@ -6214,6 +6370,10 @@ win_paint(void)
 #endif
   }
 
+  PERF_ADD_TICKS(padding_paint_ticks, mintty_perf_ticks() - perf_padding_t0);
+  perf_t0 = mintty_perf_ticks();
   EndPaint(wnd, &p);
+  PERF_ADD_TICKS(endpaint_ticks, mintty_perf_ticks() - perf_t0);
+  mintty_perf_update_end();
 }
 
