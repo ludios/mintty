@@ -3691,10 +3691,12 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
   bool underlaid = false;
   void clear_run() {
     if (!underlaid) {
-      // clear background of current output chunk
-      HBRUSH bgb = CreateSolidBrush(bg);
-      FillRect(dc, &box, bgb);
-      DeleteObject(bgb);
+      // clear background of current output chunk;
+      // the recolourable stock DC brush yields the identical solid fill
+      // while avoiding CreateSolidBrush/DeleteObject GDI object churn
+      // on every painted run
+      SetDCBrushColor(dc, bg);
+      FillRect(dc, &box, GetStockObject(DC_BRUSH));
 
       underlaid = true;
     }
