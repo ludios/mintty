@@ -172,10 +172,8 @@ $(BINDIR)/term%.o: term%.c
 $(BINDIR)/term.o: term.c emojibase.t emojiseqs.t
 	$(CC) -c $(DEPOPT) $(CCFLAGS) $(CPPFLAGS) -fstack-check $< -o $(BINDIR)/term.o
 
-# do not optimize wintext.c; this causes a mysterious delay if 
-# win_char_width is called with a non-BMP character
 $(BINDIR)/wintext.o: wintext.c
-	$(CC) -c $(DEPOPT) $(CCFLAGS) -O0 $(CPPFLAGS) -fstack-check $< -o $(BINDIR)/wintext.o
+	$(CC) -c $(DEPOPT) $(CCFLAGS) $(CPPFLAGS) -fstack-check $< -o $(BINDIR)/wintext.o
 
 $(BINDIR)/appinfo.o: appinfo.c appinfo.h appinfo.t
 	$(CC) -c $(DEPOPT) -O0 $(CPPFLAGS) -fstack-check $< -o $(BINDIR)/appinfo.o
