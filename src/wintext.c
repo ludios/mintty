@@ -1316,6 +1316,8 @@ static int     paint_buf_h  = 0;        // back buffer height (pixels)
 static bool    paint_buf_stale = true;  // buffer lags the displines cache
 static bool    paint_buffered  = false; // painting currently routed to buffer
 static HDC     paint_win_dc = 0;        // window DC while routed to buffer
+static int     paint_dirty_top = 0;     // first character row painted (incl.)
+static int     paint_dirty_bot = -1;    // last character row painted (incl.)
 
 static int update_skipped = 0;
 int lines_scrolled = 0;
@@ -1762,15 +1764,23 @@ win_paint_buffer_begin(void)
   paint_win_dc = dc;
   dc = paint_buf_dc;
   paint_buffered = true;
+  // reset the dirty row span; win_text extends it as it paints
+  paint_dirty_top = term_allrows;
+  paint_dirty_bot = -1;
   return true;
 }
 
 /*
  * Finish a buffered paint: point the global dc back at the window
- * target and transfer the text area (the region term_paint can touch)
- * from the buffer to the window in one blit. Clip regions already set
- * on the window DC (search bar exclusion, WM_PAINT update region)
- * restrict the blit just as they restricted direct painting before.
+ * target and transfer the painted rows from the buffer to the window
+ * in one blit. Only the dirty row span recorded by win_text is
+ * transferred, padded by one row on each side to cover pixels painted
+ * outside the nominal row (double-height glyphs of LATTR_BOT lines
+ * reach one row up; bloom and overhang spill a few pixels). Rows never
+ * blitted keep their identical window content, so restricting the blit
+ * is loss-free. Clip regions already set on the window DC (search bar
+ * exclusion, WM_PAINT update region) restrict the blit just as they
+ * restricted direct painting before.
  */
 static void
 win_paint_buffer_end(void)
@@ -1779,10 +1789,16 @@ win_paint_buffer_end(void)
   dc = paint_win_dc;
   paint_win_dc = 0;
   paint_buffered = false;
+  if (paint_dirty_bot < 0) {
+    return;  // nothing painted, nothing to transfer
+  }
+  assert(paint_dirty_top <= paint_dirty_bot);
+  int top = max(0, paint_dirty_top - 1);
+  int bot = min(term_allrows, paint_dirty_bot + 2);  // exclusive
   int x = PADDING;
-  int y = OFFSET + PADDING;
+  int y = OFFSET + PADDING + top * cell_height;
   int w = cell_width  * term.cols;
-  int h = cell_height * term_allrows;
+  int h = cell_height * (bot - top);
   BitBlt(dc, x, y, w, h, paint_buf_dc, x, y, SRCCOPY);
 }
 
@@ -3389,6 +3405,17 @@ apply_attr_colour(cattr a, attr_colour_mode mode)
 void
 win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, ushort lattr, char has_rtl, char has_sea, bool clearpad, uchar phase)
 {
+  if (paint_buffered) {
+    // extend the dirty row span for the back buffer blit;
+    // recording unconditionally can only over-extend the span
+    // (a blit of unchanged rows is loss-free), never miss painting
+    if (ty < paint_dirty_top) {
+      paint_dirty_top = ty;
+    }
+    if (ty > paint_dirty_bot) {
+      paint_dirty_bot = ty;
+    }
+  }
 #ifdef debug_wscale
   if (attr.attr & (TATTR_EXPAND | TATTR_NARROW | TATTR_WIDE))
     for (int i = 0; i < len; i++)
