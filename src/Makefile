@@ -148,6 +148,9 @@ else
 # support cygwin debug package:
 #  CFLAGS += -g # not needed; -ggdb and more injected by cygport
 #  do not LDFLAGS += -s
+
+  CFLAGS  += -flto=auto
+  LDFLAGS += -flto=auto -mtune=atom -fomit-frame-pointer -fstack-check -O3
 endif
 
 ifdef DMALLOC
