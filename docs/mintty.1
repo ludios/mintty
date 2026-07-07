@@ -1994,7 +1994,9 @@ When this option is set =0, text chunks consisting of plain printable
 ASCII in the primary font are rendered with the plain TextOut API, so 
 that no ligatures are applied to them; this also speeds up display, 
 particularly of large windows. Note that ligatures may still be applied 
-to text chunks containing non-ASCII characters.
+to text chunks containing non-ASCII characters; ASCII characters are 
+however excluded from the shaping context of adjacent non-ASCII 
+characters with this setting.
 With a value greater than 1, additional ligatures are enabled, e.g. 
 turning "<\-", "\->", "<\-\-", "\-\->" into arrows, and "<=", ">=" into 
 less/greater or equal symbols. Note the ambiguity of ligature transformation 

@@ -3173,6 +3173,16 @@ term_paint(void)
     term.cursor_on && !term.show_other_screen
     ? term.curs.y - term.disptop : -1;
 
+ /* Whether ASCII output chunks are rendered without Uniscribe shaping:
+  * with FontRender=textout all output uses plain ExtTextOutW, and with
+  * Ligatures=0 chunks of plain printable ASCII in the primary font take
+  * the plain ExtTextOutW path (win_text). Splitting or merging chunks
+  * between two such characters then cannot change their rendering, as
+  * per-cell advances are enforced either way; this enables merging of
+  * output chunks below.
+  */
+  bool unshaped_ascii = cfg.font_render == FR_TEXTOUT || cfg.ligatures == 0;
+
   int nlines_progress = 0;
   int total_progress = 0;
 
@@ -4132,6 +4142,7 @@ term_paint(void)
     char has_rtl = 0;
     char has_sea = 0;  // South East Asian script
     uchar bc = 0;
+    bool prev_ascii = false;  // previous char was unshaped-ASCII eligible
     bool dirty_run = (line->lattr != displine->lattr);
     bool dirty_line = dirty_run;
 #if defined(debug_dirty) && debug_dirty > 1
@@ -4432,11 +4443,31 @@ term_paint(void)
       }
 
       uchar tbc = bidi_class(xtchar);
+      bool tascii = tchar >= ' ' && tchar <= '~';
+
+     /* When ASCII is rendered without shaping (see unshaped_ascii),
+      * the class-change breaks below serve no purpose between two ASCII
+      * characters, so they are skipped for such pairs; this merges e.g.
+      * file paths and numbers into single output chunks, reducing
+      * per-chunk output overhead during full-screen repaints.
+      * Conversely, ASCII is then kept out of shaped chunks entirely by
+      * breaking at ASCII/non-ASCII boundaries, so that merged chunks
+      * remain pure ASCII and take the unshaped ExtTextOutW path.
+      * Composed combining characters are exempt from the forced break
+      * as they must stay in one chunk with their predecessor (below).
+      */
+      if (unshaped_ascii && textlen && tascii != prev_ascii
+          && !is_comcom(tchar)
+         )
+        trace_run("asc"), break_run = true;
 
       if (textlen && tbc != bc) {
         if (is_rtl_class(tbc) != is_rtl_class(bc))
           // break at RTL to support RTL font fallback
           trace_run("rtl"), break_run = true;
+        else if (unshaped_ascii && tascii && prev_ascii)
+          // no break between two unshaped ASCII characters (see above)
+          ;
         else if (!is_sep_class(tbc) && !is_sep_class(bc))
           // break at other changes to avoid glyph confusion (#285)
           trace_run("bcs"), break_run = true;
@@ -4446,6 +4477,7 @@ term_paint(void)
           trace_run("bcp"), break_run = true;
       }
       bc = tbc;
+      prev_ascii = tascii;
 
      /* Flush previous output chunk on break_run */
       if (break_run || cfg.bloom) {
