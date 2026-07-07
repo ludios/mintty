@@ -1971,8 +1971,9 @@ Select the rendering system used for text display:
 .TQ
 .B Ligatures support
 These options affect support for ligatures.
-They are not capable of disabling ligatures, however, as those are 
-applied by Windows font handling. Setting \fIFontRender=textout\fP 
+They are not capable of disabling ligatures in general, however, as 
+those are applied by Windows font handling; but see \fILigatures=0\fP 
+below. Setting \fIFontRender=textout\fP 
 disables Uniscribe, including ligatures support.
 
 .ul
@@ -1989,6 +1990,11 @@ after the cursor is moved.
 This setting can affect the set of ligatures applied, as supported by the 
 selected font.
 When this option is set =1, the default set of ligatures is applied.
+When this option is set =0, text chunks consisting of plain printable 
+ASCII in the primary font are rendered with the plain TextOut API, so 
+that no ligatures are applied to them; this also speeds up display, 
+particularly of large windows. Note that ligatures may still be applied 
+to text chunks containing non-ASCII characters.
 With a value greater than 1, additional ligatures are enabled, e.g. 
 turning "<\-", "\->", "<\-\-", "\-\->" into arrows, and "<=", ">=" into 
 less/greater or equal symbols. Note the ambiguity of ligature transformation 

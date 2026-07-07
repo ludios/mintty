@@ -3596,6 +3596,26 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
       use_uniscribe = false;
     }
   }
+  if (use_uniscribe && cfg.ligatures == 0 && findex == 0) {
+   /* With ligature application disabled (Ligatures=0), skip Uniscribe
+      shaping for runs consisting entirely of printable ASCII in the
+      primary font. For such runs, shaping can only differ from plain
+      ExtTextOutW output through default OpenType substitutions
+      (liga/calt programming ligatures), which this setting disavows;
+      cell advances are forced by dxs either way. This avoids the
+      per-run ScriptStringAnalyse fixed cost for the bulk of typical
+      terminal content. The bypass is restricted to the primary font
+      so that alternative fonts keep Uniscribe font fallback even for
+      ASCII; RTL runs never get here (use_uniscribe already false)
+      and runs with combining characters contain non-ASCII text. */
+    bool ascii_run = true;
+    for (int i = 0; i < len && ascii_run; i++) {
+      ascii_run = text[i] >= ' ' && text[i] <= '~';
+    }
+    if (ascii_run) {
+      use_uniscribe = false;
+    }
+  }
 #ifdef no_Uniscribe_for_ASCII_only_chunks
   // this "optimization" was intended to avoid a performance penalty 
   // for Uniscribe when there is no need for Uniscribe;
