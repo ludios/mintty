@@ -1295,6 +1295,28 @@ static HDC dc;
 static enum { UPDATE_IDLE, UPDATE_BLOCKED, UPDATE_PENDING } update_state;
 static bool ime_open = false;
 
+/*
+ * Display back buffer (option DisplayBuffering).
+ * Painting a display update directly to the window DC takes long enough
+ * on large windows that the compositor shows partially painted frames
+ * (tearing/shearing during scrolling output). When buffering is
+ * engaged, term_paint output via the global dc is routed into this
+ * persistent memory bitmap instead and transferred to the window with
+ * a single BitBlt of the text area per update.
+ * The buffer accumulates the same incrementally painted state as the
+ * displines cache; whenever a frame is painted directly instead
+ * (buffering off or bypassed), the buffer goes stale relative to the
+ * displines cache, which paint_buf_stale records so that the next
+ * buffered frame repaints everything into the buffer first.
+ */
+static HDC     paint_buf_dc = 0;        // memory DC of the back buffer
+static HBITMAP paint_buf_bm = 0;        // bitmap selected into paint_buf_dc
+static int     paint_buf_w  = 0;        // back buffer width (pixels)
+static int     paint_buf_h  = 0;        // back buffer height (pixels)
+static bool    paint_buf_stale = true;  // buffer lags the displines cache
+static bool    paint_buffered  = false; // painting currently routed to buffer
+static HDC     paint_win_dc = 0;        // window DC while routed to buffer
+
 static int update_skipped = 0;
 int lines_scrolled = 0;
 
@@ -1642,6 +1664,144 @@ show_curchar_info(char tag)
 }
 
 
+/*
+ * Whether display updates can currently be routed through the back
+ * buffer. Returns false for the modes that paint to the window outside
+ * the global dc, which the buffer cannot capture:
+ * - Tektronix mode paints via its own window DC;
+ * - sixel images are painted directly by winimgs_paint with repainting
+ *   suppression, so blitting buffer content over them would erase them;
+ * - horizontal view scrolling applies a world transform to the paint
+ *   target which does not carry over to a blitted buffer.
+ */
+static bool
+paint_buffer_usable(void)
+{
+  if (!cfg.display_buffering || tek_mode) {
+    return false;
+  }
+  if (horclip() != 0) {
+    return false;
+  }
+  if (term.imgs.first) {
+    return false;
+  }
+  return true;
+}
+
+/*
+ * Route subsequent painting via the global dc into the back buffer.
+ * The global dc must hold the window target (from GetDC or BeginPaint).
+ * Returns true if buffering was engaged; win_paint_buffer_end must then
+ * be called after term_paint. Returns false to paint directly to the
+ * window as without buffering.
+ */
+static bool
+win_paint_buffer_begin(void)
+{
+  if (!paint_buffer_usable()) {
+    paint_buf_stale = true;  // direct painting bypasses the buffer
+    return false;
+  }
+  RECT cr;
+  GetClientRect(wnd, &cr);
+  int w = cr.right - cr.left;
+  int h = cr.bottom - cr.top;
+  if (w <= 0 || h <= 0) {
+    paint_buf_stale = true;
+    return false;
+  }
+  if (!paint_buf_dc || w != paint_buf_w || h != paint_buf_h) {
+    // (re)create the buffer at the current client size
+    if (paint_buf_bm) {
+      DeleteObject(paint_buf_bm);
+      paint_buf_bm = 0;
+    }
+    if (paint_buf_dc) {
+      DeleteDC(paint_buf_dc);
+      paint_buf_dc = 0;
+    }
+    paint_buf_dc = CreateCompatibleDC(dc);
+    paint_buf_bm = paint_buf_dc ? CreateCompatibleBitmap(dc, w, h) : 0;
+    if (!paint_buf_bm) {
+      if (paint_buf_dc) {
+        DeleteDC(paint_buf_dc);
+        paint_buf_dc = 0;
+      }
+      paint_buf_stale = true;
+      return false;
+    }
+    SelectObject(paint_buf_dc, paint_buf_bm);
+    paint_buf_w = w;
+    paint_buf_h = h;
+    paint_buf_stale = true;
+  }
+  if (paint_buf_stale) {
+    // the buffer missed painting (startup, resize, or directly painted
+    // frames); force a full repaint into it before it gets blitted
+    term_invalidate(0, 0, term.cols - 1, term_allrows - 1);
+    paint_buf_stale = false;
+  }
+  assert(!paint_buffered && !paint_win_dc);
+  paint_win_dc = dc;
+  dc = paint_buf_dc;
+  paint_buffered = true;
+  return true;
+}
+
+/*
+ * Finish a buffered paint: point the global dc back at the window
+ * target and transfer the text area (the region term_paint can touch)
+ * from the buffer to the window in one blit. Clip regions already set
+ * on the window DC (search bar exclusion, WM_PAINT update region)
+ * restrict the blit just as they restricted direct painting before.
+ */
+static void
+win_paint_buffer_end(void)
+{
+  assert(paint_buffered && paint_win_dc);
+  dc = paint_win_dc;
+  paint_win_dc = 0;
+  paint_buffered = false;
+  int x = PADDING;
+  int y = OFFSET + PADDING;
+  int w = cell_width  * term.cols;
+  int h = cell_height * term_allrows;
+  BitBlt(dc, x, y, w, h, paint_buf_dc, x, y, SRCCOPY);
+}
+
+/*
+ * DC for painting terminal overlay graphics (emoji images) on:
+ * the back buffer while a buffered display update is in progress
+ * (so that the subsequent blit includes them), else a fresh window DC
+ * as before. Pair each call with win_release_paint_dc.
+ */
+HDC
+win_get_paint_dc(void)
+{
+  if (paint_buffered) {
+    assert(dc == paint_buf_dc);
+    return dc;
+  }
+  return GetDC(wnd);
+}
+
+/*
+ * Release a DC obtained from win_get_paint_dc; pdc is the value that
+ * call returned. Releases the window DC in the unbuffered case and is
+ * a no-op for the shared back buffer DC.
+ */
+void
+win_release_paint_dc(HDC pdc)
+{
+  if (!paint_buffered) {
+    ReleaseDC(wnd, pdc);
+  }
+  else {
+    assert(pdc == paint_buf_dc);
+  }
+}
+
 #define update_timer 16
 
 void
@@ -1698,7 +1858,11 @@ do_update(void)
   if (tek_mode)
     tek_paint();
   else {
+    bool buffered = win_paint_buffer_begin();
     term_paint();
+    if (buffered) {
+      win_paint_buffer_end();
+    }
     winimgs_paint();
   }
 
@@ -5943,7 +6107,11 @@ win_paint(void)
     if (tek_mode)
       tek_paint();
     else {
+      bool buffered = win_paint_buffer_begin();
       term_paint();
+      if (buffered) {
+        win_paint_buffer_end();
+      }
       winimgs_paint();
     }
   }

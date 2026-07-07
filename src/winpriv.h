@@ -109,6 +109,8 @@ extern void win_update_now(void);
 extern bool fill_background(HDC dc, RECT * boxp);
 extern void win_flush_background(bool clearbg);
 extern void win_paint(void);
+extern HDC win_get_paint_dc(void);
+extern void win_release_paint_dc(HDC pdc);
 
 extern void win_init_fonts(int size, bool allfonts);
 extern wstring win_get_font(uint findex);

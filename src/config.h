@@ -215,6 +215,7 @@ typedef struct {
   bool disable_alternate_screen;
   bool erase_to_scrollback;
   int display_speedup;
+  bool display_buffering;
   string suppress_sgr;
   string suppress_dec;
   string suppress_win;

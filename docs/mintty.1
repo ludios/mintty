@@ -3127,6 +3127,15 @@ is visually scrolled off right away, so effectively increasing output speed.
 The maximum value is 9.
 
 .TQ
+\fBBuffered display updates\fP (DisplayBuffering=yes)
+When enabled, mintty composes each display update in an off-screen 
+buffer and transfers it to the screen in one step, so that partially 
+painted frames do not become visible during heavy output ("tearing" 
+or "shearing" of scrolling text). Buffering is suspended automatically 
+while Tektronix mode or sixel graphics are active, or while the 
+terminal view is scrolled horizontally.
+
+.TQ
 \fBDecelerate display speed to virtual serial transmission rate\fP (Baud=0)
 This setting can demonstrate a legacy feeling of a serial terminal connection.
 Typical baud rates (as supported by DEC VT420) were 
