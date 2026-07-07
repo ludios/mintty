@@ -1206,7 +1206,7 @@ win_emoji_show(int x0, int y, wchar * efn, void * * bufpoi, int * buflen, int el
     }
   }
 
-  HDC dc = GetDC(wnd);
+  HDC dc = win_get_paint_dc();
 
   int coord_transformed = 0;
   XFORM old_xform;
@@ -1244,7 +1244,7 @@ win_emoji_show(int x0, int y, wchar * efn, void * * bufpoi, int * buflen, int el
   if (coord_transformed)
     SetWorldTransform(dc, &old_xform);
 
-  ReleaseDC(wnd, dc);
+  win_release_paint_dc(dc);
 
   if (fs) {
     // Release stream resources, close file.
