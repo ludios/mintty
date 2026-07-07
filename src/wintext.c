@@ -622,6 +622,116 @@ check_font(HDC dc, struct fontfam * ff)
 }
 
 /*
+ * Memoisation of win_char_width results (see win_char_width below).
+ * win_char_width is invoked from the paint loop (term_paint) for every
+ * non-ASCII character cell whose contents changed since the previous
+ * frame, i.e. for whole screens of cells when scrolling non-ASCII text.
+ * Its uncached implementation costs at least one GetDC/SelectObject/
+ * GetCharWidth32W/ReleaseDC round-trip per call, and for symbol ranges
+ * it renders the glyph into a bitmap and reads the pixels back
+ * (act_char_width), so repeated calls dominate frame time on large
+ * (e.g. 4K) windows. Results only depend on the character, the font
+ * family/style derived from the attributes, and the current font
+ * instances/metrics, so they can be cached until fonts are
+ * (re)initialised (win_init_fontfamily), which covers font selection,
+ * zooming and DPI changes.
+ * The cache is a fixed-size open-addressing hash table; it is a cache,
+ * not a map: on collision overflow an old entry is simply evicted.
+ */
+#define WCW_CACHE_BITS 13
+#define WCW_CACHE_SIZE (1 << WCW_CACHE_BITS)
+#define WCW_CACHE_PROBES 8
+
+struct wcw_entry {
+  uint key;  // wcw_key() result; 0 marks an empty slot
+  int wid;   // memoised win_char_width result
+};
+
+static struct wcw_entry wcw_cache[WCW_CACHE_SIZE];
+
+/*
+ * Build the cache key for character c (a Unicode code point <= 0x10FFFF)
+ * under character attributes attr. The key combines everything the
+ * uncached function derives from its arguments: the code point, the
+ * font family index (clamped as in win_char_width), and the bold/italic
+ * style bits as resolved by font4(). Returns a non-zero 27-bit key
+ * (c + 1 keeps 0 available as the empty-slot marker).
+ */
+static uint
+wcw_key(xchar c, cattrflags attr)
+{
+  uint findex = (attr & FONTFAM_MASK) >> ATTR_FONTFAM_SHIFT;
+  if (findex > 10) {
+    findex = 0;  // same clamping as in win_char_width
+  }
+  struct fontfam * ff = &fontfamilies[findex];
+  uint bold = ((ff->bold_mode == BOLD_FONT) && (attr & ATTR_BOLD)) ? 1 : 0;
+  uint ital = (attr & ATTR_ITALIC)                                 ? 1 : 0;
+  return (c + 1) | findex << 21 | bold << 25 | ital << 26;
+}
+
+/*
+ * Map a cache key to its home slot (Fibonacci hashing).
+ * Returns a slot index in [0, WCW_CACHE_SIZE).
+ */
+static uint
+wcw_slot(uint key)
+{
+  return (key * 2654435761u) >> (32 - WCW_CACHE_BITS);
+}
+
+/*
+ * Look up key in the cache. On a hit, store the memoised width into
+ * *wid and return true; return false on a miss. *wid is unchanged on
+ * a miss.
+ */
+static bool
+wcw_lookup(uint key, int * wid)
+{
+  uint slot = wcw_slot(key);
+  for (uint i = 0; i < WCW_CACHE_PROBES; i++) {
+    struct wcw_entry * e = &wcw_cache[(slot + i) & (WCW_CACHE_SIZE - 1)];
+    if (e->key == key) {
+      *wid = e->wid;
+      return true;
+    }
+    if (!e->key) {
+      return false;
+    }
+  }
+  return false;
+}
+
+/*
+ * Store the width result wid for cache key key, reusing an empty or
+ * matching slot within the probe window, else evicting the home slot.
+ */
+static void
+wcw_store(uint key, int wid)
+{
+  uint slot   = wcw_slot(key);
+  uint victim = slot;
+  for (uint i = 0; i < WCW_CACHE_PROBES; i++) {
+    struct wcw_entry * e = &wcw_cache[(slot + i) & (WCW_CACHE_SIZE - 1)];
+    if (!e->key || e->key == key) {
+      victim = (slot + i) & (WCW_CACHE_SIZE - 1);
+      break;
+    }
+  }
+  wcw_cache[victim] = (struct wcw_entry){.key = key, .wid = wid};
+}
+
+/*
+ * Drop all memoised widths; to be called whenever fonts or font metrics
+ * may have changed (font re-initialisation).
+ */
+static void
+wcw_flush(void)
+{
+  memset(wcw_cache, 0, sizeof wcw_cache);
+}
+
+/*
  * Initialise all the fonts of a font family we will need initially:
    Normal (the ordinary font), and optionally bold and underline;
    Other font variations are done if/when they are needed (another_font).
@@ -647,6 +757,8 @@ win_init_fontfamily(HDC dc, int findex)
     ff->cpcache[i] = 0;
     ff->cpcachelen[i] = 0;
   }
+  // fonts and metrics are about to change; memoised widths go stale
+  wcw_flush();
   ff->cached = false;
   for (uint i = 0; i < FONT_MAXNO; i++) {
     if (ff->fonts[i]) {
@@ -5148,9 +5260,11 @@ int win_char_width(xchar, cattrflags);
      (of a CJK ambiguous-wide font such as BatangChe) to normal width 
      if desired.
    * also whether to expand a normal width character if expected wide
+   This is the uncached implementation; win_char_width below wraps it 
+   with a memoisation cache (see the wcw_* functions further above).
  */
-int
-win_char_width(xchar c, cattrflags attr)
+static int
+win_char_width_uncached(xchar c, cattrflags attr)
 {
   // NOTE: if wintext.c is compiled with optimization (-O1 or higher), 
   // and win_char_width is called for a non-BMP character (>= 0x10000), 
@@ -5494,6 +5608,39 @@ win_char_width(xchar c, cattrflags attr)
   ReleaseDC(wnd, dc);
   //printf(" win_char_width %04X -> %d\n", c, ibuf);
   return ibuf;
+}
+
+/*
+ * Memoising wrapper around win_char_width_uncached; same contract:
+ * return the width in character cells of code point c when rendered
+ * with the font family/style selected by attributes attr (usually 1
+ * or 2; 0 if width enquiry failed). Results are cached until the next
+ * font (re)initialisation flushes the cache (win_init_fontfamily).
+ */
+int
+win_char_width(xchar c, cattrflags attr)
+{
+  if (c >= ' ' && c <= '~') {
+    // ASCII fast path as in the uncached implementation;
+    // keep these out of the cache
+    return 1;
+  }
+  if (c > 0x10FFFF) {
+    // out of Unicode range; don't let it alias another cache key
+    return win_char_width_uncached(c, attr);
+  }
+  uint key = wcw_key(c, attr);
+  int wid;
+  if (wcw_lookup(key, &wid)) {
+    return wid;
+  }
+  wid = win_char_width_uncached(c, attr);
+  if (wid != 0) {
+    // width 0 signals a failed width enquiry; do not memoise failures,
+    // so they keep being retried per call as before
+    wcw_store(key, wid);
+  }
+  return wid;
 }
 
 #define dont_debug_win_combine
