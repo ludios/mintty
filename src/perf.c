@@ -190,7 +190,6 @@ mintty_perf_emit_frame(void)
   PUT_U64(run_breaks_clean_cell);
   PUT_U64(run_breaks_ascii_boundary);
   PUT_U64(run_breaks_bidi);
-  PUT_U64(run_breaks_bloom);
   PUT_U64(bidi_class_calls);
   PUT_U64(bidi_ascii_cells);
   PUT_U64(bidi_nonascii_cells);

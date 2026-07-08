@@ -4556,11 +4556,8 @@ term_paint(void)
       prev_ascii = tascii;
 
      /* Flush previous output chunk on break_run */
-      if (break_run || cfg.bloom) {
-        if (break_run)
-          PERF_COUNT(run_breaks, 1);
-        if (cfg.bloom)
-          PERF_COUNT(run_breaks_bloom, 1);
+      if (break_run) {
+        PERF_COUNT(run_breaks, 1);
         if ((dirty_run && textlen) || overlaying)
           out_text(start, i, text, textlen, attr, textattr, line->lattr, has_rtl, has_sea);
         start = j;

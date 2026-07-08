@@ -1337,7 +1337,7 @@ static int     paint_dc_busy = 0;       // transform/clip nesting depth on dc
 /*
  * Track whether a world transform or clip region is active on the
  * global dc. All such state in the paint path is transient and paired
- * (RTL line mirroring, bloom, glyph zoom, curly underline clip,
+ * (RTL line mirroring, glyph zoom, curly underline clip,
  * self-drawn graphics clip); each pair brackets its section with
  * push/pop. win_fill_rect writes the DIB pixel store directly only at
  * depth 0, else falls back to FillRect which honours the DC state.
@@ -1898,7 +1898,7 @@ win_paint_buffer_begin(void)
  * in one blit. Only the dirty row span recorded by win_text is
  * transferred, padded by one row on each side to cover pixels painted
  * outside the nominal row (double-height glyphs of LATTR_BOT lines
- * reach one row up; bloom and overhang spill a few pixels). Rows never
+ * reach one row up; glyph overhang spills a few pixels). Rows never
  * blitted keep their identical window content, so restricting the blit
  * is loss-free. Clip regions already set on the window DC (search bar
  * exclusion, WM_PAINT update region) restrict the blit just as they
@@ -4596,49 +4596,7 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
     SetTextColor(dc, fg);
   }
 
-  int bloom = 0;
-  XFORM old_xform_bloom;
-  int coord_transformed_bloom = 0;
-  if (cfg.bloom) {
-    bloom = 2;
-    fg = ((fg & 0xFEFEFEFE) >> 1) + ((win_get_colour(BG_COLOUR_I) & 0xFEFEFEFE) >> 1);
-    SetTextColor(dc, fg);
-  }
-
 draw:;
-  if (bloom) {
-    if (bloom > 1 || bloom >= 1)
-      fg = ((fg & 0xFEFEFEFE) >> 1) + ((win_get_colour(BG_COLOUR_I) & 0xFEFEFEFE) >> 1);
-    else {
-      colour fg2 = (fg & 0xFEFEFEFE) >> 1;
-      colour bg2 = (win_get_colour(BG_COLOUR_I) & 0xFEFEFEFE) >> 1;
-      colour fg4 = (fg & 0xFCFCFCFC) >> 2;
-      colour bg4 = (win_get_colour(BG_COLOUR_I) & 0xFCFCFCFC) >> 2;
-      fg = fg2 + fg4 + bg2 + bg4;
-    }
-    SetTextColor(dc, fg);
-    win_select_font(ff->fonts[nfont | FONT_BOLD]);
-
-    coord_transformed_bloom = SetGraphicsMode(dc, GM_ADVANCED);
-    if (coord_transformed_bloom && GetWorldTransform(dc, &old_xform_bloom)) {
-      clear_run();
-
-      float scale = 1.0 + (float)bloom / 7.0;
-      /*
-        xt' = xt + cell_width / 2
-        x' - xt' = sc * (x - xt')
-        x' = xt' + sc * x - sc * xt'
-        x' = sc * x + (1 - sc) * xt'
-      */
-      XFORM xform = (XFORM){scale, 0.0, 0.0, scale, 
-                    ((float)xt + (float)cell_width / 2) * (1.0 - scale), 
-                    ((float)yt + (float)cell_height / 2) * (1.0 - scale)};
-      coord_transformed_bloom = ModifyWorldTransform(dc, &xform, MWT_LEFTMULTIPLY);
-      if (coord_transformed_bloom) {
-        paint_dc_busy_push();  // popped at the bloom layer restore
-      }
-    }
-  }
 #ifdef debug_draw
   if (*text != ' ')
     printf("draw @%d:%d %d:%d %d:%d\n", ty, tx, yt, xt, y, x);
@@ -5852,17 +5810,6 @@ skip_drawing:;
     DeleteObject(SelectObject(dc, oldpen));
     PERF_COUNT(win_text_gdi_select_object_calls, 1);
     PERF_COUNT(win_text_gdi_delete_object_calls, 1);
-  }
-
-  if (bloom && coord_transformed_bloom) {
-    bloom--;
-    SetWorldTransform(dc, &old_xform_bloom);
-    paint_dc_busy_pop();
-    fg = fg0;
-    SetTextColor(dc, fg);
-    if (!bloom)
-      win_select_font(ff->fonts[nfont]);
-    goto draw;
   }
 
   if (layer) {

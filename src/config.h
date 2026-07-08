@@ -277,7 +277,6 @@ typedef struct {
   char progress_bar;
   int progress_scan;
   int baud;
-  int bloom;
   wstring options_font;
   int options_fontsize;
   string old_options;
