@@ -4493,12 +4493,23 @@ term_paint(void)
       }
 
       bool tascii = tchar >= ' ' && tchar <= '~';
-      PERF_COUNT(bidi_class_calls, 1);
       if (tascii)
         PERF_COUNT(bidi_ascii_cells, 1);
       else
         PERF_COUNT(bidi_nonascii_cells, 1);
-      uchar tbc = bidi_class(xtchar);
+
+      uchar tbc;
+      if (unshaped_ascii && textlen && tascii && prev_ascii) {
+        /* The run-breaking logic below deliberately ignores bidi class
+           changes between two unshaped printable ASCII characters, so avoid
+           the full Unicode range lookup for the overwhelmingly common case. */
+        PERF_COUNT(bidi_ascii_pair_no_breaks, 1);
+        tbc = bc;
+      }
+      else {
+        PERF_COUNT(bidi_class_calls, 1);
+        tbc = bidi_class(xtchar);
+      }
 
      /* When ASCII is rendered without shaping (see unshaped_ascii),
       * the class-change breaks below serve no purpose between two ASCII
@@ -4523,10 +4534,6 @@ term_paint(void)
           // break at RTL to support RTL font fallback
           PERF_COUNT(run_breaks_bidi, 1);
           trace_run("rtl"), break_run = true;
-        }
-        else if (unshaped_ascii && tascii && prev_ascii) {
-          // no break between two unshaped ASCII characters (see above)
-          PERF_COUNT(bidi_ascii_pair_no_breaks, 1);
         }
         else if (!is_sep_class(tbc) && !is_sep_class(bc)) {
           // break at other changes to avoid glyph confusion (#285)
