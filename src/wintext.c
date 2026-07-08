@@ -4187,8 +4187,20 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
 
  /* With selected font, begin preparing the rendering */
   long long perf_state_t0 = mintty_perf_ticks();
-  win_select_font(ff->fonts[nfont]);
-  PERF_COUNT(select_font_calls, 1);
+ /* Self-drawn graphics runs (origtext will be set below) render no
+    glyphs through the run font - they take the skip_drawing path and
+    draw with pens and fills - so selecting it is a wasted kernel
+    transition on the DIB-backed DC. Worse, the text/box alternation
+    of line-art screens defeats the same-font skip of win_select_font
+    for the interleaved text runs. Skip the selection for such runs;
+    the special underlay glyph, the one glyph output a self-drawn run
+    can still make, selects its font on the spot. vt52 fraction runs
+    render through the normal text path and keep the selection. */
+  bool selfdrawn_run = boxpower || boxcoded || dectcs;
+  if (!selfdrawn_run) {
+    win_select_font(ff->fonts[nfont]);
+    PERF_COUNT(select_font_calls, 1);
+  }
   PERF_ADD_TICKS(select_font_ticks, mintty_perf_ticks() - perf_state_t0);
   perf_state_t0 = mintty_perf_ticks();
   SetTextColor(dc, fg);
@@ -4527,6 +4539,9 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
 
  /* Special underlay */
   if (do_special_underlay && !ldisp2) {
+    // ensure the run font for the underlay glyph; self-drawn runs skip
+    // the selection above, and for text runs this is a cache hit
+    win_select_font(ff->fonts[nfont]);
     xchar uc = 0x2312;
     int ulaylen = uc > 0xFFFF ? ulen * 2 : ulen;
     wchar ulay[ulaylen];
