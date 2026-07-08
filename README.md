@@ -2,6 +2,8 @@ This is an fork of https://github.com/mintty/mintty where the rendering has been
 
 Memory usage has increased due to rendering to a 32bpp DIB.
 
+The hidden Bloom effect has been removed.
+
 Use at your own risk.
 
 <hr>
