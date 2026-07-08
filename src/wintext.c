@@ -761,6 +761,9 @@ win_init_fontfamily(HDC dc, int findex)
   }
   // fonts and metrics are about to change; memoised widths go stale
   wcw_flush();
+  // font handles are about to be deleted and may be reallocated at the
+  // same values; forget the cached selection
+  win_select_font_reset();
   ff->cached = false;
   for (uint i = 0; i < FONT_MAXNO; i++) {
     if (ff->fonts[i]) {
@@ -1316,6 +1319,44 @@ static HBITMAP paint_buf_bm = 0;        // bitmap selected into paint_buf_dc
 static uint *  paint_buf_bits = 0;      // DIB pixel store (0: plain bitmap)
 static HRGN    paint_buf_scratch_rgn = 0;  // scratch for clip presence query
 static int     paint_dc_busy = 0;       // transform/clip nesting depth on dc
+static HFONT   paint_buf_font = 0;      // font selected in paint_buf_dc
+static bool    paint_buf_font_ok = false;  // paint_buf_font is trustworthy
+
+/*
+ * Select font f into the global dc, skipping the call when f is
+ * already selected. The skip only applies while painting is routed to
+ * the private, persistent back buffer DC, whose selected font nobody
+ * else changes: all font selection in the paint path goes through this
+ * function, the GDI+ emoji path restores the DC state it touches, and
+ * measurement helpers use their own DCs. On the shared window DC
+ * (unbuffered painting), whose state resets with every GetDC, the
+ * selection is always issued. The cache is invalidated when the buffer
+ * is dropped and when fonts are recreated (win_init_fontfamily), the
+ * latter also guarding against GDI handle reuse after font deletion.
+ */
+static void
+win_select_font(HFONT f)
+{
+  if (paint_buffered) {
+    assert(dc == paint_buf_dc);
+    if (paint_buf_font_ok && f == paint_buf_font) {
+      return;
+    }
+    SelectObject(dc, f);
+    paint_buf_font    = f;
+    paint_buf_font_ok = true;
+    return;
+  }
+  SelectObject(dc, f);
+}
+
+/* Forget the cached font selection (buffer drop, font recreation). */
+static void
+win_select_font_reset(void)
+{
+  paint_buf_font    = 0;
+  paint_buf_font_ok = false;
+}
 
 /*
  * Track whether a world transform or clip region is active on the
@@ -1745,6 +1786,7 @@ paint_buffer_drop(void)
     paint_buf_bm = 0;
   }
   paint_buf_bits = 0;
+  win_select_font_reset();
   paint_buf_w = 0;
   paint_buf_h = 0;
   paint_buf_stale = true;
@@ -4140,7 +4182,7 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
 
  /* With selected font, begin preparing the rendering */
   long long perf_state_t0 = mintty_perf_ticks();
-  SelectObject(dc, ff->fonts[nfont]);
+  win_select_font(ff->fonts[nfont]);
   PERF_COUNT(select_font_calls, 1);
   PERF_ADD_TICKS(select_font_ticks, mintty_perf_ticks() - perf_state_t0);
   perf_state_t0 = mintty_perf_ticks();
@@ -4570,7 +4612,7 @@ draw:;
       fg = fg2 + fg4 + bg2 + bg4;
     }
     SetTextColor(dc, fg);
-    SelectObject(dc, ff->fonts[nfont | FONT_BOLD]);
+    win_select_font(ff->fonts[nfont | FONT_BOLD]);
 
     coord_transformed_bloom = SetGraphicsMode(dc, GM_ADVANCED);
     if (coord_transformed_bloom && GetWorldTransform(dc, &old_xform_bloom)) {
@@ -5814,7 +5856,7 @@ skip_drawing:;
     fg = fg0;
     SetTextColor(dc, fg);
     if (!bloom)
-      SelectObject(dc, ff->fonts[nfont]);
+      win_select_font(ff->fonts[nfont]);
     goto draw;
   }
 
