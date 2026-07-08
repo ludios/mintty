@@ -1315,6 +1315,32 @@ static HDC     paint_buf_dc = 0;        // memory DC of the back buffer
 static HBITMAP paint_buf_bm = 0;        // bitmap selected into paint_buf_dc
 static uint *  paint_buf_bits = 0;      // DIB pixel store (0: plain bitmap)
 static HRGN    paint_buf_scratch_rgn = 0;  // scratch for clip presence query
+static int     paint_dc_busy = 0;       // transform/clip nesting depth on dc
+
+/*
+ * Track whether a world transform or clip region is active on the
+ * global dc. All such state in the paint path is transient and paired
+ * (RTL line mirroring, bloom, glyph zoom, curly underline clip,
+ * self-drawn graphics clip); each pair brackets its section with
+ * push/pop. win_fill_rect writes the DIB pixel store directly only at
+ * depth 0, else falls back to FillRect which honours the DC state.
+ * Debug builds cross-check the counter against the DC (see
+ * win_fill_rect), so an unbalanced pair reports itself.
+ */
+static void
+paint_dc_busy_push(void)
+{
+  paint_dc_busy++;
+}
+
+static void
+paint_dc_busy_pop(void)
+{
+  assert(paint_dc_busy > 0);
+  if (paint_dc_busy > 0) {
+    paint_dc_busy--;
+  }
+}
 static int     paint_buf_w  = 0;        // back buffer width (pixels)
 static int     paint_buf_h  = 0;        // back buffer height (pixels)
 static bool    paint_buf_stale = true;  // buffer lags the displines cache
@@ -1805,6 +1831,13 @@ win_paint_buffer_begin(void)
   paint_win_dc = dc;
   dc = paint_buf_dc;
   paint_buffered = true;
+  // bound any push/pop imbalance to a single frame
+  paint_dc_busy = 0;
+  /* One flush per frame: operations on DIB-section DCs execute
+     unbatched (empirically: SelectObject/ExtTextOut on this DC cost a
+     kernel transition each), so per-fill flushing is redundant; this
+     single flush covers any operations still pending from elsewhere. */
+  GdiFlush();
   // reset the dirty row span; win_text extends it as it paints
   paint_dirty_top = term_allrows;
   paint_dirty_bot = -1;
@@ -1869,24 +1902,28 @@ win_paint_buffer_end(void)
 static void
 win_fill_rect(const RECT * r, colour c)
 {
-  if (paint_buffered && paint_buf_bits) {
-    bool plain = true;
+  if (paint_buffered && paint_buf_bits && paint_dc_busy == 0) {
+#ifndef NDEBUG
+    // cross-check the tracked state against the DC: an unbalanced
+    // transform/clip pair anywhere in the paint path trips this
+    bool dbg_plain = true;
     if (GetGraphicsMode(dc) == GM_ADVANCED) {
       XFORM xf;
-      plain = GetWorldTransform(dc, &xf)
+      dbg_plain = GetWorldTransform(dc, &xf)
               && xf.eM11 == 1.0f && xf.eM12 == 0.0f
               && xf.eM21 == 0.0f && xf.eM22 == 1.0f
               && xf.eDx  == 0.0f && xf.eDy  == 0.0f;
     }
-    if (plain) {
+    if (dbg_plain) {
       if (!paint_buf_scratch_rgn) {
         paint_buf_scratch_rgn = CreateRectRgn(0, 0, 0, 0);
       }
-      // GetClipRgn returns 0 if no clip region is selected
-      plain = paint_buf_scratch_rgn
+      dbg_plain = paint_buf_scratch_rgn
               && GetClipRgn(dc, paint_buf_scratch_rgn) == 0;
     }
-    if (plain) {
+    assert(dbg_plain);
+#endif
+    {
       int left   = max(0, (int)r->left);
       int top    = max(0, (int)r->top);
       int right  = min(paint_buf_w, (int)r->right);
@@ -1894,9 +1931,6 @@ win_fill_rect(const RECT * r, colour c)
       if (left >= right || top >= bottom) {
         return;
       }
-      // complete pending batched GDI operations on the DIB before
-      // accessing its bits directly, as required for DIB sections
-      GdiFlush();
       // BI_RGB 32bpp stores 0x00RRGGBB words; colour is COLORREF
       // 0x00BBGGRR, so swap the red and blue channels
       uint pix = ((c & 0xFFu) << 16) | (c & 0xFF00u) | ((c >> 16) & 0xFFu);
@@ -4437,6 +4471,9 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
     if (coord_transformed && GetWorldTransform(dc, &old_xform)) {
       XFORM xform = (XFORM){-1.0, 0.0, 0.0, 1.0, term.cols * cell_width + 2 * PADDING, 0.0};
       coord_transformed = SetWorldTransform(dc, &xform);
+      if (coord_transformed) {
+        paint_dc_busy_push();  // popped at the coord_transformed restore
+      }
     }
   }
   PERF_ADD_TICKS(win_text_coord_line_ticks, mintty_perf_ticks() - perf_coord_line_t0);
@@ -4550,6 +4587,9 @@ draw:;
                     ((float)xt + (float)cell_width / 2) * (1.0 - scale), 
                     ((float)yt + (float)cell_height / 2) * (1.0 - scale)};
       coord_transformed_bloom = ModifyWorldTransform(dc, &xform, MWT_LEFTMULTIPLY);
+      if (coord_transformed_bloom) {
+        paint_dc_busy_push();  // popped at the bloom layer restore
+      }
     }
   }
 #ifdef debug_draw
@@ -4594,6 +4634,7 @@ draw:;
 
     HRGN ur = 0;
     GetClipRgn(dc, ur);
+    paint_dc_busy_push();  // popped after the curly clip is cleared below
     IntersectClipRect(dc, box.left, box.top, box.right, box.bottom);
 
     HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, ul));
@@ -4607,6 +4648,7 @@ draw:;
     DeleteObject(oldpen);
 
     SelectClipRgn(dc, ur);
+    paint_dc_busy_pop();
   }
   else
 
@@ -4693,6 +4735,9 @@ draw:;
       float scale = (float)wscale / 100.0;
       XFORM xform = (XFORM){scale, 0.0, 0.0, 1.0, xt * (1.0 - scale), 0.0};
       coord_transformed2 = ModifyWorldTransform(dc, &xform, MWT_LEFTMULTIPLY);
+      if (coord_transformed2) {
+        paint_dc_busy_push();  // popped at the coord_transformed2 restore
+      }
       if (coord_transformed2) {
         for (int i = 0; i < len; i++)
           dxs_[i] = dxs[i];
@@ -4856,6 +4901,7 @@ skip_drawing:;
   long long perf_coord_restore_t0 = mintty_perf_ticks();
   if (coord_transformed2) {
     SetWorldTransform(dc, &old_xform2);
+    paint_dc_busy_pop();
     // restore these in case we're in a shadow loop
     for (int i = 0; i < len; i++)
       dxs[i] = dxs_[i];
@@ -4903,6 +4949,9 @@ skip_drawing:;
                       * (lattr >= LATTR_TOP && ty < term_allrows - 1 ? 2 : 1);
     HRGN clipr = selfdraw_get_clip_rgn(x, y, x + n * char_width, y + clip_height);
     PERF_COUNT(win_text_clip_set_calls, 1);
+    // push unconditionally, symmetric with clearclipr's pop; if region
+    // creation failed, fills merely fall back to GDI while "busy"
+    paint_dc_busy_push();
     if (clipr) {
       SelectClipRgn(dc, clipr);
       PERF_COUNT(win_text_gdi_select_clip_calls, 1);
@@ -4913,6 +4962,7 @@ skip_drawing:;
   {
     long long perf_clip_t0 = mintty_perf_ticks();
     SelectClipRgn(dc, 0);
+    paint_dc_busy_pop();
     PERF_COUNT(win_text_gdi_select_clip_calls, 1);
     PERF_COUNT(win_text_clip_clear_calls, 1);
     PERF_ADD_TICKS(win_text_clip_ticks, mintty_perf_ticks() - perf_clip_t0);
@@ -5760,6 +5810,7 @@ skip_drawing:;
   if (bloom && coord_transformed_bloom) {
     bloom--;
     SetWorldTransform(dc, &old_xform_bloom);
+    paint_dc_busy_pop();
     fg = fg0;
     SetTextColor(dc, fg);
     if (!bloom)
@@ -5786,8 +5837,10 @@ skip_drawing:;
     goto draw;
   }
 
-  if (coord_transformed)
+  if (coord_transformed) {
     SetWorldTransform(dc, &old_xform);
+    paint_dc_busy_pop();
+  }
   PERF_ADD_TICKS(win_text_ticks, mintty_perf_ticks() - perf_win_text_start);
 }
 
