@@ -14,6 +14,7 @@
 
 #include <winnls.h>
 #include <usp10.h>  // Uniscribe
+#include <stdlib.h>  // atexit
 
 
 #define dont_debug_bold 1
@@ -3188,6 +3189,161 @@ text_out_end()
   }
 }
 
+
+typedef struct {
+  HPEN pen;
+  bool cached;
+} selfdraw_pen_ref;
+
+typedef struct {
+  HBRUSH brush;
+  bool cached;
+} selfdraw_brush_ref;
+
+typedef struct {
+  bool used;
+  bool ext;
+  DWORD style;
+  int width;
+  colour col;
+  HPEN pen;
+} selfdraw_pen_cache_entry;
+
+typedef struct {
+  bool used;
+  colour col;
+  HBRUSH brush;
+} selfdraw_brush_cache_entry;
+
+#define SELFDRAW_PEN_CACHE_SIZE 512
+#define SELFDRAW_BRUSH_CACHE_SIZE 256
+
+static selfdraw_pen_cache_entry selfdraw_pen_cache[SELFDRAW_PEN_CACHE_SIZE];
+static selfdraw_brush_cache_entry selfdraw_brush_cache[SELFDRAW_BRUSH_CACHE_SIZE];
+static uint selfdraw_pen_cache_len;
+static uint selfdraw_brush_cache_len;
+static HRGN selfdraw_clip_rgn;
+static bool selfdraw_cache_registered;
+
+static void
+selfdraw_cache_cleanup(void)
+{
+  for (uint i = 0; i < selfdraw_pen_cache_len; i++) {
+    if (selfdraw_pen_cache[i].pen)
+      DeleteObject(selfdraw_pen_cache[i].pen);
+    selfdraw_pen_cache[i] = (selfdraw_pen_cache_entry){0};
+  }
+  selfdraw_pen_cache_len = 0;
+  for (uint i = 0; i < selfdraw_brush_cache_len; i++) {
+    if (selfdraw_brush_cache[i].brush)
+      DeleteObject(selfdraw_brush_cache[i].brush);
+    selfdraw_brush_cache[i] = (selfdraw_brush_cache_entry){0};
+  }
+  selfdraw_brush_cache_len = 0;
+  if (selfdraw_clip_rgn) {
+    DeleteObject(selfdraw_clip_rgn);
+    selfdraw_clip_rgn = 0;
+  }
+}
+
+static void
+selfdraw_cache_register(void)
+{
+  if (!selfdraw_cache_registered) {
+    atexit(selfdraw_cache_cleanup);
+    selfdraw_cache_registered = true;
+  }
+}
+
+static HPEN
+selfdraw_create_pen(bool ext, DWORD style, int width, colour col)
+{
+  if (ext) {
+    LOGBRUSH brush = (LOGBRUSH){BS_SOLID, col, 0};
+    return ExtCreatePen(style, width, &brush, 0, 0);
+  }
+  return CreatePen(style, width, col);
+}
+
+static selfdraw_pen_ref
+selfdraw_get_pen(bool ext, DWORD style, int width, colour col)
+{
+  selfdraw_cache_register();
+  for (uint i = 0; i < selfdraw_pen_cache_len; i++) {
+    selfdraw_pen_cache_entry *ent = &selfdraw_pen_cache[i];
+    if (ent->used && ent->ext == ext && ent->style == style &&
+        ent->width == width && ent->col == col)
+      return (selfdraw_pen_ref){ent->pen, true};
+  }
+  if (selfdraw_pen_cache_len < lengthof(selfdraw_pen_cache)) {
+    HPEN pen = selfdraw_create_pen(ext, style, width, col);
+    PERF_COUNT(win_text_gdi_create_pen_calls, 1);
+    if (!pen)
+      return (selfdraw_pen_ref){0, false};
+    selfdraw_pen_cache_entry *ent = &selfdraw_pen_cache[selfdraw_pen_cache_len++];
+    *ent = (selfdraw_pen_cache_entry){true, ext, style, width, col, pen};
+    return (selfdraw_pen_ref){pen, true};
+  }
+  HPEN pen = selfdraw_create_pen(ext, style, width, col);
+  PERF_COUNT(win_text_gdi_create_pen_calls, 1);
+  return (selfdraw_pen_ref){pen, false};
+}
+
+static void
+selfdraw_release_pen(selfdraw_pen_ref ref)
+{
+  if (!ref.cached && ref.pen) {
+    DeleteObject(ref.pen);
+    PERF_COUNT(win_text_gdi_delete_object_calls, 1);
+  }
+}
+
+static selfdraw_brush_ref
+selfdraw_get_brush(colour col)
+{
+  selfdraw_cache_register();
+  for (uint i = 0; i < selfdraw_brush_cache_len; i++) {
+    selfdraw_brush_cache_entry *ent = &selfdraw_brush_cache[i];
+    if (ent->used && ent->col == col)
+      return (selfdraw_brush_ref){ent->brush, true};
+  }
+  if (selfdraw_brush_cache_len < lengthof(selfdraw_brush_cache)) {
+    HBRUSH brush = CreateSolidBrush(col);
+    PERF_COUNT(win_text_gdi_create_brush_calls, 1);
+    if (!brush)
+      return (selfdraw_brush_ref){0, false};
+    selfdraw_brush_cache_entry *ent = &selfdraw_brush_cache[selfdraw_brush_cache_len++];
+    *ent = (selfdraw_brush_cache_entry){true, col, brush};
+    return (selfdraw_brush_ref){brush, true};
+  }
+  HBRUSH brush = CreateSolidBrush(col);
+  PERF_COUNT(win_text_gdi_create_brush_calls, 1);
+  return (selfdraw_brush_ref){brush, false};
+}
+
+static void
+selfdraw_release_brush(selfdraw_brush_ref ref)
+{
+  if (!ref.cached && ref.brush) {
+    DeleteObject(ref.brush);
+    PERF_COUNT(win_text_gdi_delete_object_calls, 1);
+  }
+}
+
+static HRGN
+selfdraw_get_clip_rgn(int left, int top, int right, int bottom)
+{
+  selfdraw_cache_register();
+  if (!selfdraw_clip_rgn) {
+    selfdraw_clip_rgn = CreateRectRgn(left, top, right, bottom);
+    PERF_COUNT(win_text_gdi_create_rgn_calls, 1);
+  }
+  else {
+    SetRectRgn(selfdraw_clip_rgn, left, top, right, bottom);
+  }
+  return selfdraw_clip_rgn;
+}
+
 static int
 perf_selfdraw_fillrect(HDC hdc, const RECT *rect, HBRUSH brush)
 {
@@ -4616,17 +4772,17 @@ skip_drawing:;
 #define DRAW_DOWN  0x4
 #endif
 
-  HRGN clipr;
   void setclipr(int x, int y, int n)
   {
     long long perf_clip_t0 = mintty_perf_ticks();
     int clip_height = cell_height 
                       * (lattr >= LATTR_TOP && ty < term_allrows - 1 ? 2 : 1);
-    clipr = CreateRectRgn(x, y, x + n * char_width, y + clip_height);
+    HRGN clipr = selfdraw_get_clip_rgn(x, y, x + n * char_width, y + clip_height);
     PERF_COUNT(win_text_clip_set_calls, 1);
-    PERF_COUNT(win_text_gdi_create_rgn_calls, 1);
-    SelectClipRgn(dc, clipr);
-    PERF_COUNT(win_text_gdi_select_clip_calls, 1);
+    if (clipr) {
+      SelectClipRgn(dc, clipr);
+      PERF_COUNT(win_text_gdi_select_clip_calls, 1);
+    }
     PERF_ADD_TICKS(win_text_clip_ticks, mintty_perf_ticks() - perf_clip_t0);
   }
   void clearclipr()
@@ -4634,8 +4790,6 @@ skip_drawing:;
     long long perf_clip_t0 = mintty_perf_ticks();
     SelectClipRgn(dc, 0);
     PERF_COUNT(win_text_gdi_select_clip_calls, 1);
-    DeleteObject(clipr);
-    PERF_COUNT(win_text_gdi_delete_object_calls, 1);
     PERF_COUNT(win_text_clip_clear_calls, 1);
     PERF_ADD_TICKS(win_text_clip_ticks, mintty_perf_ticks() - perf_clip_t0);
   }
@@ -4645,8 +4799,8 @@ skip_drawing:;
     long long perf_selfdraw_part_t0 = mintty_perf_ticks();
     setclipr(x, y, ulen);
 
-    HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, line_width, fg));
-    PERF_COUNT(win_text_gdi_create_pen_calls, 1);
+    selfdraw_pen_ref vpen = selfdraw_get_pen(false, PS_SOLID, line_width, fg);
+    HPEN oldpen = SelectObject(dc, vpen.pen);
     PERF_COUNT(win_text_gdi_select_object_calls, 1);
 
     int xi = x;
@@ -4662,10 +4816,9 @@ skip_drawing:;
       xi += char_width;
     }
 
-    oldpen = SelectObject(dc, oldpen);
+    SelectObject(dc, oldpen);
     PERF_COUNT(win_text_gdi_select_object_calls, 1);
-    DeleteObject(oldpen);
-    PERF_COUNT(win_text_gdi_delete_object_calls, 1);
+    selfdraw_release_pen(vpen);
 
     clearclipr();
     PERF_ADD_TICKS(win_text_selfdraw_vt52_ticks, mintty_perf_ticks() - perf_selfdraw_part_t0);
@@ -4706,16 +4859,16 @@ skip_drawing:;
     void linedraw(char l, char t, char r, char b, colour c)
     {
       PERF_COUNT(win_text_selfdraw_linedraw_calls, 1);
-      HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, c));
-      PERF_COUNT(win_text_gdi_create_pen_calls, 1);
+      selfdraw_pen_ref lpen = selfdraw_get_pen(false, PS_SOLID, 0, c);
+      HPEN oldpen = SelectObject(dc, lpen.pen);
       PERF_COUNT(win_text_gdi_select_object_calls, 1);
       //printf("line %d %d %d %d\n", xi + l, y0 + t, xi + r, y0 + b);
       MoveToEx(dc, xi + l, y0 + t, null);
       LineTo(dc, xi + r, y0 + b);
       PERF_COUNT(win_text_selfdraw_line_ops, 1);
-      DeleteObject(SelectObject(dc, oldpen));
+      SelectObject(dc, oldpen);
       PERF_COUNT(win_text_gdi_select_object_calls, 1);
-      PERF_COUNT(win_text_gdi_delete_object_calls, 1);
+      selfdraw_release_pen(lpen);
     }
     void lines(char x1, char y1, char x2, char y2, char x3, char y3)
     {
@@ -4730,8 +4883,8 @@ skip_drawing:;
       }
 
       int w = y3 >= 0 ? line_width : 0;
-      HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, w, fg));
-      PERF_COUNT(win_text_gdi_create_pen_calls, 1);
+      selfdraw_pen_ref lpen = selfdraw_get_pen(false, PS_SOLID, w, fg);
+      HPEN oldpen = SelectObject(dc, lpen.pen);
       PERF_COUNT(win_text_gdi_select_object_calls, 1);
       MoveToEx(dc, xi + _x1, y0 + _y1, null);
       LineTo(dc, xi + _x2, y0 + _y2);
@@ -4741,9 +4894,9 @@ skip_drawing:;
         LineTo(dc, xi + _x2, y0 + _y2 - 1);
         PERF_COUNT(win_text_selfdraw_line_ops, 1);
       }
-      DeleteObject(SelectObject(dc, oldpen));
+      SelectObject(dc, oldpen);
       PERF_COUNT(win_text_gdi_select_object_calls, 1);
-      PERF_COUNT(win_text_gdi_delete_object_calls, 1);
+      selfdraw_release_pen(lpen);
     }
     void trio(char x1, char y1, char x2, char y2, char x3, char y3, bool chord)
     {
@@ -4759,10 +4912,10 @@ skip_drawing:;
       int _x3 = char_width * x3 / 8;
       int _y3 = char_height * y3 / 8;
 
-      HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, fg));
-      HBRUSH oldbrush = SelectObject(dc, CreateSolidBrush(fg));
-      PERF_COUNT(win_text_gdi_create_pen_calls, 1);
-      PERF_COUNT(win_text_gdi_create_brush_calls, 1);
+      selfdraw_pen_ref tpen = selfdraw_get_pen(false, PS_SOLID, 0, fg);
+      selfdraw_brush_ref tbrush = selfdraw_get_brush(fg);
+      HPEN oldpen = SelectObject(dc, tpen.pen);
+      HBRUSH oldbrush = SelectObject(dc, tbrush.brush);
       PERF_COUNT(win_text_gdi_select_object_calls, 2);
       if (chord) {
         if (lefthalf) {
@@ -4784,10 +4937,11 @@ skip_drawing:;
                               {xi + _x3, y0 + _y3}}, 3);
         PERF_COUNT(win_text_selfdraw_polygon_ops, 1);
       }
-      DeleteObject(SelectObject(dc, oldbrush));
-      DeleteObject(SelectObject(dc, oldpen));
+      SelectObject(dc, oldbrush);
+      SelectObject(dc, oldpen);
       PERF_COUNT(win_text_gdi_select_object_calls, 2);
-      PERF_COUNT(win_text_gdi_delete_object_calls, 2);
+      selfdraw_release_brush(tbrush);
+      selfdraw_release_pen(tpen);
     }
     void triangle(char x1, char y1, char x2, char y2, char x3, char y3)
     {
@@ -4843,12 +4997,10 @@ skip_drawing:;
       }
       //printf("25XX >%d%%%d %d%%%d %d%%%d %d%%%d\n", cl, dl, ct, dt, cr, dr, cb, db);
       //printf("Rect %d %d %d %d\n", xi + cl_, y0 + ct_, xi + cr_, y0 + cb_);
-      HBRUSH br = CreateSolidBrush(c);
-      PERF_COUNT(win_text_gdi_create_brush_calls, 1);
-      perf_selfdraw_fillrect(dc, &(RECT){xi + cl_, y0 + ct_, xi + cr_, y0 + cb_}, br);
+      selfdraw_brush_ref rbrush = selfdraw_get_brush(c);
+      perf_selfdraw_fillrect(dc, &(RECT){xi + cl_, y0 + ct_, xi + cr_, y0 + cb_}, rbrush.brush);
       PERF_COUNT(win_text_selfdraw_rect_ops, 1);
-      DeleteObject(br);
-      PERF_COUNT(win_text_gdi_delete_object_calls, 1);
+      selfdraw_release_brush(rbrush);
       if (dl)
         linedraw(cl, ct, cl, cb, colmix(8 - dl));
       if (dt)
@@ -4879,16 +5031,17 @@ skip_drawing:;
 
     // create common Box Drawing resources
     long long perf_selfdraw_resource_t0 = mintty_perf_ticks();
-    LOGBRUSH brush = (LOGBRUSH){BS_SOLID, fg, 0};
     DWORD style = PS_GEOMETRIC | PS_SOLID;
-    HPEN roundpen = ExtCreatePen(style, penwidth, &brush, 0, 0);
+    selfdraw_pen_ref roundpen_ref = selfdraw_get_pen(true, style, penwidth, fg);
+    HPEN roundpen = roundpen_ref.pen;
     if (boxpower)
       style |= PS_ENDCAP_SQUARE;  // skipped for DEC Technical sum segments
-    HPEN pen = ExtCreatePen(style, penwidth, &brush, 0, 0);
-    HPEN heavypen = ExtCreatePen(style, heavypenwidth, &brush, 0, 0);
-    HBRUSH br = CreateSolidBrush(fg);
-    PERF_COUNT(win_text_gdi_create_pen_calls, 3);
-    PERF_COUNT(win_text_gdi_create_brush_calls, 1);
+    selfdraw_pen_ref pen_ref = selfdraw_get_pen(true, style, penwidth, fg);
+    selfdraw_pen_ref heavypen_ref = selfdraw_get_pen(true, style, heavypenwidth, fg);
+    selfdraw_brush_ref br_ref = selfdraw_get_brush(fg);
+    HPEN pen = pen_ref.pen;
+    HPEN heavypen = heavypen_ref.pen;
+    HBRUSH br = br_ref.brush;
     // save pen and preload default pen for some performance
     HPEN oldpen = SelectObject(dc, pen);
     PERF_COUNT(win_text_gdi_select_object_calls, 1);
@@ -5177,18 +5330,17 @@ skip_drawing:;
     long long perf_selfdraw_teardown_t0 = mintty_perf_ticks();
     SelectObject(dc, oldpen);
     PERF_COUNT(win_text_gdi_select_object_calls, 1);
-    DeleteObject(pen);
-    DeleteObject(roundpen);
-    DeleteObject(heavypen);
-    DeleteObject(br);
-    PERF_COUNT(win_text_gdi_delete_object_calls, 4);
+    selfdraw_release_pen(pen_ref);
+    selfdraw_release_pen(roundpen_ref);
+    selfdraw_release_pen(heavypen_ref);
+    selfdraw_release_brush(br_ref);
     PERF_ADD_TICKS(win_text_selfdraw_teardown_ticks, mintty_perf_ticks() - perf_selfdraw_teardown_t0);
     PERF_ADD_TICKS(win_text_selfdraw_boxpower_ticks, mintty_perf_ticks() - perf_selfdraw_part_t0);
   }
   else if (boxcoded && origtext) {  // VT100/VT52 box drawing and scanlines
     long long perf_selfdraw_part_t0 = mintty_perf_ticks();
-    HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, fg));
-    PERF_COUNT(win_text_gdi_create_pen_calls, 1);
+    selfdraw_pen_ref bpen = selfdraw_get_pen(false, PS_SOLID, 0, fg);
+    HPEN oldpen = SelectObject(dc, bpen.pen);
     PERF_COUNT(win_text_gdi_select_object_calls, 1);
 
     int xi = x;
@@ -5265,10 +5417,9 @@ skip_drawing:;
       xi += char_width;
     }
 
-    oldpen = SelectObject(dc, oldpen);
+    SelectObject(dc, oldpen);
     PERF_COUNT(win_text_gdi_select_object_calls, 1);
-    DeleteObject(oldpen);
-    PERF_COUNT(win_text_gdi_delete_object_calls, 1);
+    selfdraw_release_pen(bpen);
     PERF_ADD_TICKS(win_text_selfdraw_boxcoded_ticks, mintty_perf_ticks() - perf_selfdraw_part_t0);
   }
   if (vt52fraction || boxpower || dectcs || boxcoded)
