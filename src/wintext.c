@@ -1731,9 +1731,13 @@ paint_buffer_drop(void)
  * be called after term_paint. Returns false to paint directly to the
  * window as without buffering.
  */
+static void selfdraw_cache_maintain(void);
+
 static bool
 win_paint_buffer_begin(void)
 {
+  // reset overflowed drawn-graphics caches at this safe point
+  selfdraw_cache_maintain();
   PERF_COUNT(buffer_begin_calls, 1);
   if (!paint_buffer_usable()) {
     paint_buf_stale = true;  // direct painting bypasses the buffer
@@ -3330,6 +3334,7 @@ static selfdraw_pen_cache_entry selfdraw_pen_cache[SELFDRAW_PEN_CACHE_SIZE];
 static selfdraw_brush_cache_entry selfdraw_brush_cache[SELFDRAW_BRUSH_CACHE_SIZE];
 static uint selfdraw_pen_cache_len;
 static uint selfdraw_brush_cache_len;
+static bool selfdraw_cache_overflow;
 static HRGN selfdraw_clip_rgn;
 static bool selfdraw_cache_registered;
 
@@ -3351,6 +3356,23 @@ selfdraw_cache_cleanup(void)
   if (selfdraw_clip_rgn) {
     DeleteObject(selfdraw_clip_rgn);
     selfdraw_clip_rgn = 0;
+  }
+}
+
+/*
+ * If a lookup overflowed the caches since the last display update,
+ * reset them so that caching resumes with the current working set.
+ * Called at frame start (win_paint_buffer_begin), where no cached pen
+ * or brush can be selected into any DC: every drawing path restores
+ * the DC's previous objects before returning, so deleting the cached
+ * objects here is safe.
+ */
+static void
+selfdraw_cache_maintain(void)
+{
+  if (selfdraw_cache_overflow) {
+    selfdraw_cache_cleanup();
+    selfdraw_cache_overflow = false;
   }
 }
 
@@ -3392,6 +3414,10 @@ selfdraw_get_pen(bool ext, DWORD style, int width, colour col)
     *ent = (selfdraw_pen_cache_entry){true, ext, style, width, col, pen};
     return (selfdraw_pen_ref){pen, true};
   }
+  /* cache full: create per call and request a reset at the next safe
+     point (frame start), so a colour-rich session does not fall back
+     to permanent per-call object churn */
+  selfdraw_cache_overflow = true;
   HPEN pen = selfdraw_create_pen(ext, style, width, col);
   PERF_COUNT(win_text_gdi_create_pen_calls, 1);
   return (selfdraw_pen_ref){pen, false};
@@ -3424,6 +3450,7 @@ selfdraw_get_brush(colour col)
     *ent = (selfdraw_brush_cache_entry){true, col, brush};
     return (selfdraw_brush_ref){brush, true};
   }
+  selfdraw_cache_overflow = true;  // see selfdraw_get_pen
   HBRUSH brush = CreateSolidBrush(col);
   PERF_COUNT(win_text_gdi_create_brush_calls, 1);
   return (selfdraw_brush_ref){brush, false};
