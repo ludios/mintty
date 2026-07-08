@@ -5079,11 +5079,10 @@ skip_drawing:;
       void boxline(int x1, int y1, int x2, int y2)
       {
         //printf("boxline %d/%d..%d/%d w %d\n", x1, y1, x2, y2, line_width);
-        // for dashed lines, use FillRect here
-        // for slanted lines ╲ ╳ ╱, use LineTo below
-        // for box border lines, use LineTo below
-        //if (y3 != -2) {  // for slanted lines in ╲ ╳ ╱, rather use LineTo
-        if (y3 < -2) {  // dashed lines
+        // Use rectangles for dashed and axis-aligned strokes. This avoids
+        // pen selection and LineTo overhead for the common TUI box characters
+        // while keeping diagonals and arcs on the existing pen path.
+        if (y3 < -2 || x1 == x2 || y1 == y2) {
           // apply pen width
           int w = penwidth;
           if (heavy)
