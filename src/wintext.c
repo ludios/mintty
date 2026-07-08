@@ -5032,17 +5032,25 @@ skip_drawing:;
     HPEN pen = pen_ref.pen;
     HPEN heavypen = heavypen_ref.pen;
     HBRUSH br = br_ref.brush;
-    // save pen and preload default pen for some performance
-    HPEN oldpen = SelectObject(dc, pen);
-    PERF_COUNT(win_text_gdi_select_object_calls, 1);
-    HPEN curpen = pen;
+    /* Defer selecting a pen until a path actually needs LineTo/AngleArc.
+       Common box-drawing characters are now drawn as fills, so preselecting
+       and restoring a pen on every tiny self-drawn run is pure GDI state
+       churn for the hot TUI path. */
+    HPEN oldpen = 0;
+    HPEN curpen = 0;
+    bool pen_selected = false;
     PERF_ADD_TICKS(win_text_selfdraw_resource_ticks, mintty_perf_ticks() - perf_selfdraw_resource_t0);
 
     // set pen on demand
     void setpen(HPEN newpen)
     {
       if (newpen != curpen) {
-        SelectObject(dc, newpen);
+        if (pen_selected)
+          SelectObject(dc, newpen);
+        else {
+          oldpen = SelectObject(dc, newpen);
+          pen_selected = true;
+        }
         PERF_COUNT(win_text_gdi_select_object_calls, 1);
         curpen = newpen;
       }
@@ -5350,8 +5358,10 @@ skip_drawing:;
 
     // remove Box Drawing resources
     long long perf_selfdraw_teardown_t0 = mintty_perf_ticks();
-    SelectObject(dc, oldpen);
-    PERF_COUNT(win_text_gdi_select_object_calls, 1);
+    if (pen_selected) {
+      SelectObject(dc, oldpen);
+      PERF_COUNT(win_text_gdi_select_object_calls, 1);
+    }
     selfdraw_release_pen(pen_ref);
     selfdraw_release_pen(roundpen_ref);
     selfdraw_release_pen(heavypen_ref);
