@@ -16,7 +16,7 @@ mintty_perf_env_enabled(void)
 {
   const char *env = getenv("MINTTY_PERF");
   if (!env || !*env) {
-    return true;
+    return false;
   }
   return strcmp(env, "0") != 0 && strcasecmp(env, "off") != 0 &&
          strcasecmp(env, "false") != 0 && strcasecmp(env, "no") != 0;
