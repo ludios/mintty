@@ -2901,6 +2901,9 @@ load_background_brush(HDC dc)
 bool
 fill_background(HDC dc, RECT * boxp)
 {
+  PERF_COUNT(fill_background_calls, 1);
+  long long perf_fill_background_t0 = mintty_perf_ticks();
+
   load_background_brush(dc);
   if (wallp) {
     offset_bg(dc);
@@ -2910,12 +2913,14 @@ fill_background(HDC dc, RECT * boxp)
   if (boxp->top < OFFSET)
     boxp->top = OFFSET;
 
-  return
+  bool res =
     (bgbrush_bmp && FillRect(dc, boxp, bgbrush_bmp))
 #if CYGWIN_VERSION_API_MINOR >= 74
     || (bgbrush_img && fill_rect(dc, boxp, bgbrush_img))
 #endif
     ;
+  PERF_ADD_TICKS(fill_background_ticks, mintty_perf_ticks() - perf_fill_background_t0);
+  return res;
 }
 
 #define dont_debug_aspect_ratio
@@ -3108,12 +3113,18 @@ static bool use_uniscribe;
 static void
 text_out_start(HDC hdc, LPCWSTR psz, int cch, int *dxs)
 {
+  long long perf_text_out_start_t0 = mintty_perf_ticks();
   PERF_COUNT(text_out_start_calls, 1);
   PERF_COUNT(text_out_start_chars, cch);
-  if (cch == 0)
+  if (cch == 0) {
     use_uniscribe = false;
-  if (!use_uniscribe)
+    PERF_ADD_TICKS(text_out_start_ticks, mintty_perf_ticks() - perf_text_out_start_t0);
     return;
+  }
+  if (!use_uniscribe) {
+    PERF_ADD_TICKS(text_out_start_ticks, mintty_perf_ticks() - perf_text_out_start_t0);
+    return;
+  }
 
 #if CYGWIN_VERSION_API_MINOR >= 74
   static SCRIPT_CONTROL sctrl_lig = {.fMergeNeutralItems = 1};
@@ -3135,6 +3146,7 @@ text_out_start(HDC hdc, LPCWSTR psz, int cch, int *dxs)
     PERF_COUNT(uniscribe_analyse_failures, 1);
     use_uniscribe = false;
   }
+  PERF_ADD_TICKS(text_out_start_ticks, mintty_perf_ticks() - perf_text_out_start_t0);
 }
 
 static void
@@ -3174,6 +3186,20 @@ text_out_end()
     ScriptStringFree(&ssa);
     PERF_ADD_TICKS(script_string_free_ticks, mintty_perf_ticks() - perf_t0);
   }
+}
+
+static int
+perf_selfdraw_fillrect(HDC hdc, const RECT *rect, HBRUSH brush)
+{
+  int width = rect->right - rect->left;
+  int height = rect->bottom - rect->top;
+  long long perf_t0 = mintty_perf_ticks();
+  int res = FillRect(hdc, rect, brush);
+  PERF_COUNT(win_text_selfdraw_fillrect_calls, 1);
+  if (width > 0 && height > 0)
+    PERF_COUNT(win_text_selfdraw_fillrect_pixels, (uint64_t)width * (uint64_t)height);
+  PERF_ADD_TICKS(win_text_selfdraw_fillrect_ticks, mintty_perf_ticks() - perf_t0);
+  return res;
 }
 
 
@@ -3525,6 +3551,7 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
 #endif
   //if (kb_trace) {printf("[%ld] <win_text\n", mtime()); kb_trace = 0;}
 
+  long long perf_font_resolve_t0 = mintty_perf_ticks();
   int findex = (attr.attr & FONTFAM_MASK) >> ATTR_FONTFAM_SHIFT;
   bool boxpower = false;  // Box Drawing or Powerline symbols
   bool boxcoded = false;  // coded DEC box drawing and scanlines
@@ -3548,6 +3575,26 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
 
     findex = 0;
   }
+  if (boxpower) {
+    PERF_COUNT(win_text_boxpower_calls, 1);
+    PERF_COUNT(win_text_boxpower_chars, len);
+  }
+  if (boxcoded) {
+    PERF_COUNT(win_text_boxcoded_calls, 1);
+    PERF_COUNT(win_text_boxcoded_chars, len);
+  }
+  if (vt52fraction) {
+    PERF_COUNT(win_text_vt52fraction_calls, 1);
+    PERF_COUNT(win_text_vt52fraction_chars, len);
+  }
+  if (dectcs) {
+    PERF_COUNT(win_text_dectcs_calls, 1);
+    PERF_COUNT(win_text_dectcs_chars, len);
+  }
+  if (has_rtl)
+    PERF_COUNT(win_text_rtl_calls, 1);
+  if (has_sea)
+    PERF_COUNT(win_text_sea_calls, 1);
 
   struct fontfam * ff = &fontfamilies[findex];
   // check whether font lacks support of given RTL bidi class
@@ -3613,7 +3660,9 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
   if (attr.attr & ATTR_REVERSE)
     default_bg = false;
   //cattr attr0 = attr;  // needed unmodified colour attributes for combinings
+  long long perf_attr_colour_t0 = mintty_perf_ticks();
   attr = apply_attr_colour(attr, ACM_TERM);
+  PERF_ADD_TICKS(win_text_attr_colour_ticks, mintty_perf_ticks() - perf_attr_colour_t0);
   colour fg = attr.truefg;
   colour bg = attr.truebg;
   // ATTR_BOLD is now set if and only if we need further thickening.
@@ -3759,6 +3808,8 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
   printf("font %02X (%dpt) bold_mode %d attr_bold %d fg %06X <%ls>\n", nfont, font_size, ff->bold_mode, !!(attr.attr & ATTR_BOLD), fg, t);
 #endif
 
+  PERF_ADD_TICKS(win_text_font_resolve_ticks, mintty_perf_ticks() - perf_font_resolve_t0);
+
  /* With selected font, begin preparing the rendering */
   long long perf_state_t0 = mintty_perf_ticks();
   SelectObject(dc, ff->fonts[nfont]);
@@ -3823,6 +3874,10 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
 
   bool combining = attr.attr & TATTR_COMBINING;
   bool combining_double = attr.attr & TATTR_COMBDOUBL;
+  if (combining)
+    PERF_COUNT(win_text_combining_calls, 1);
+  if (combining_double)
+    PERF_COUNT(win_text_combining_double_calls, 1);
 
   bool let_windows_combine = false;
   if (combining) {
@@ -3845,8 +3900,12 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
   wchar * origtext = 0;
   if (boxpower || boxcoded || dectcs) {
     // keep orig text in separate ref
+    PERF_COUNT(win_text_origtext_alloc_calls, 1);
+    PERF_COUNT(win_text_origtext_alloc_chars, len);
+    long long perf_origtext_alloc_t0 = mintty_perf_ticks();
     origtext = text;
     text = newn(wchar, len);
+    PERF_ADD_TICKS(win_text_origtext_alloc_ticks, mintty_perf_ticks() - perf_origtext_alloc_t0);
     // clear font glyphs under self-drawn geometric symbols
     // - this method of clearing background is no longer in use since 3.7.8
     // - keeping it in for now just in case; should be cleaned up later
@@ -3857,6 +3916,7 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
 
  /* Array with offsets between neighbouring characters */
   int dxs[len];
+  long long perf_dxs_t0 = mintty_perf_ticks();
   int dx = combining ? 0 : char_width;
   for (int i = 0; i < len; i++) {
     if (is_high_surrogate(text[i]))
@@ -3866,14 +3926,17 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
     else
       dxs[i] = dx;
   }
+  PERF_ADD_TICKS(win_text_dxs_ticks, mintty_perf_ticks() - perf_dxs_t0);
 
  /* Character cells length */
+  long long perf_ulen_t0 = mintty_perf_ticks();
   int ulen = 0;
   for (int i = 0; i < len; i++) {
     ulen++;
     if (char1ulen(&text[i]) == 2)
       i++;  // skip low surrogate;
   }
+  PERF_ADD_TICKS(win_text_ulen_ticks, mintty_perf_ticks() - perf_ulen_t0);
 
  /* Painting box */
   int width = char_width * (combining ? 1 : ulen);
@@ -3897,6 +3960,7 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
 
 
  /* Uniscribe handling */
+  long long perf_uniscribe_decision_t0 = mintty_perf_ticks();
   use_uniscribe = cfg.font_render == FR_UNISCRIBE && !has_rtl;
   if (combining_double)
     use_uniscribe = false;
@@ -3951,6 +4015,7 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
       }
   }
 #endif
+  PERF_ADD_TICKS(win_text_uniscribe_decision_ticks, mintty_perf_ticks() - perf_uniscribe_decision_t0);
 
 #ifdef debug_non_blank_lines
   void printline() {
@@ -4035,7 +4100,10 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
       // the recolourable stock DC brush yields the identical solid fill
       // while avoiding CreateSolidBrush/DeleteObject GDI object churn
       // on every painted run
+      long long perf_brush_t0 = mintty_perf_ticks();
       SetDCBrushColor(dc, bg);
+      PERF_COUNT(set_dc_brush_color_calls, 1);
+      PERF_ADD_TICKS(set_dc_brush_color_ticks, mintty_perf_ticks() - perf_brush_t0);
       int perf_fill_w = box.right - box.left;
       int perf_fill_h = box.bottom - box.top;
       long long perf_fill_t0 = mintty_perf_ticks();
@@ -4050,6 +4118,7 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
   }
 
  /* Graphic background: picture or texture */
+  long long perf_background_t0 = mintty_perf_ticks();
   if (*cfg.background && default_bg) {
     RECT bgbox = box0;
 
@@ -4077,8 +4146,10 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
   }
   else if (origtext && !ldisp2)
     clear_run();  // clear background for self-drawn characters (#1310)
+  PERF_ADD_TICKS(win_text_background_ticks, mintty_perf_ticks() - perf_background_t0);
 
  /* Coordinate transformation per line */
+  long long perf_coord_line_t0 = mintty_perf_ticks();
   int coord_transformed = 0;
   XFORM old_xform;
   if (lpresrtl) {
@@ -4088,6 +4159,7 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
       coord_transformed = SetWorldTransform(dc, &xform);
     }
   }
+  PERF_ADD_TICKS(win_text_coord_line_ticks, mintty_perf_ticks() - perf_coord_line_t0);
 
  /* Special underlay */
   if (do_special_underlay && !ldisp2) {
@@ -4329,6 +4401,7 @@ draw:;
   }
 
  /* Coordinate transformation per character */
+  long long perf_coord_char_t0 = mintty_perf_ticks();
   int coord_transformed2 = 0;
   XFORM old_xform2;
   RECT box_, box2_;
@@ -4360,19 +4433,25 @@ draw:;
       }
     }
   }
+  PERF_ADD_TICKS(win_text_coord_char_ticks, mintty_perf_ticks() - perf_coord_char_t0);
 
 
  /* Finally, draw the text */
 
   uint overwropt;
+  long long perf_bkmode_t0 = mintty_perf_ticks();
   if (ldisp2 || underlaid) {
     SetBkMode(dc, TRANSPARENT);
+    PERF_COUNT(set_bk_mode_calls, 1);
     overwropt = 0;
   }
   else {
     SetBkMode(dc, OPAQUE);
+    PERF_COUNT(set_bk_mode_calls, 1);
     overwropt = ETO_OPAQUE;
   }
+  PERF_ADD_TICKS(set_bk_mode_ticks, mintty_perf_ticks() - perf_bkmode_t0);
+  PERF_ADD_TICKS(win_text_bkmode_ticks, mintty_perf_ticks() - perf_bkmode_t0);
   trace_line(" TextOut:");
   // The combining characters separate rendering trick *alone* 
   // makes some combining characters better (~#553, #295), 
@@ -4387,20 +4466,26 @@ draw:;
     *dxs = char_width;  // convince Windows to apply font underlining
 
   // handle invisible and blinking attributes on image background
-  if (fg == bg && default_bg && *cfg.background)
+  if (fg == bg && default_bg && *cfg.background) {
+    PERF_COUNT(win_text_skip_invisible_calls, 1);
     goto skip_drawing;  // restore coord_transformed2, then skip self-drawing
+  }
 
   // skip text output for self-drawn characters
-  if (origtext)
+  if (origtext) {
+    PERF_COUNT(win_text_skip_origtext_calls, 1);
     goto skip_drawing;
+  }
 
 
  /* Now, really draw the text */
 
+  long long perf_textout_path_t0 = mintty_perf_ticks();
   text_out_start(dc, text, len, dxs);
 
   // overstrike loop is for shadow or manual bold mode
   for (int xoff0 = 0; xoff0 < xwidth; xoff0++) {
+    PERF_COUNT(win_text_overstrike_iterations, 1);
 #ifdef configured_glyph_shift
     // calculate glyph shift from character attribute (0..3)
     int xoff = xoff0 + glyph_shift * cell_width / 16;
@@ -4410,6 +4495,7 @@ draw:;
 #endif
 
     if ((combining || combining_double) && !has_sea) {
+      PERF_COUNT(win_text_textout_combining_calls, 1);
       // Workaround for mangled display of combining characters;
       // Arabic shaping should not be affected as the transformed 
       // presentation forms are not combining characters anymore at this point.
@@ -4455,6 +4541,7 @@ draw:;
       }
     }
     else {
+      PERF_COUNT(win_text_textout_plain_calls, 1);
       text_out(dc, xt + xoff, yt, eto_options | overwropt, &box, text, len, dxs);
       if (overwropt) {
         SetBkMode(dc, TRANSPARENT);
@@ -4477,12 +4564,16 @@ draw:;
       term_invalidate(0, 0, 0, 0);
   }
 
+  long long perf_textout_end_t0 = mintty_perf_ticks();
   text_out_end();
+  PERF_ADD_TICKS(win_text_textout_end_ticks, mintty_perf_ticks() - perf_textout_end_t0);
+  PERF_ADD_TICKS(win_text_textout_path_ticks, mintty_perf_ticks() - perf_textout_path_t0);
 
 skip_drawing:;
 
 
  /* Reset coordinate transformation */
+  long long perf_coord_restore_t0 = mintty_perf_ticks();
   if (coord_transformed2) {
     SetWorldTransform(dc, &old_xform2);
     // restore these in case we're in a shadow loop
@@ -4491,11 +4582,14 @@ skip_drawing:;
     box = box_;
     box2 = box2_;
   }
+  PERF_ADD_TICKS(win_text_coord_restore_ticks, mintty_perf_ticks() - perf_coord_restore_t0);
 
 
  /* Skip self-drawing to handle invisible attribute on image background */
-  if (fg == bg && default_bg && *cfg.background)
+  if (fg == bg && default_bg && *cfg.background) {
+    PERF_COUNT(win_text_skip_invisible_calls, 1);
     goto _return;
+  }
 
 
  /* Self-drawn characters: manual drawing of certain graphics */
@@ -4525,21 +4619,35 @@ skip_drawing:;
   HRGN clipr;
   void setclipr(int x, int y, int n)
   {
+    long long perf_clip_t0 = mintty_perf_ticks();
     int clip_height = cell_height 
                       * (lattr >= LATTR_TOP && ty < term_allrows - 1 ? 2 : 1);
     clipr = CreateRectRgn(x, y, x + n * char_width, y + clip_height);
+    PERF_COUNT(win_text_clip_set_calls, 1);
+    PERF_COUNT(win_text_gdi_create_rgn_calls, 1);
     SelectClipRgn(dc, clipr);
+    PERF_COUNT(win_text_gdi_select_clip_calls, 1);
+    PERF_ADD_TICKS(win_text_clip_ticks, mintty_perf_ticks() - perf_clip_t0);
   }
   void clearclipr()
   {
+    long long perf_clip_t0 = mintty_perf_ticks();
     SelectClipRgn(dc, 0);
+    PERF_COUNT(win_text_gdi_select_clip_calls, 1);
     DeleteObject(clipr);
+    PERF_COUNT(win_text_gdi_delete_object_calls, 1);
+    PERF_COUNT(win_text_clip_clear_calls, 1);
+    PERF_ADD_TICKS(win_text_clip_ticks, mintty_perf_ticks() - perf_clip_t0);
   }
 
+  long long perf_selfdraw_t0 = mintty_perf_ticks();
   if (vt52fraction) {  // draw VT52 fraction numerators
+    long long perf_selfdraw_part_t0 = mintty_perf_ticks();
     setclipr(x, y, ulen);
 
     HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, line_width, fg));
+    PERF_COUNT(win_text_gdi_create_pen_calls, 1);
+    PERF_COUNT(win_text_gdi_select_object_calls, 1);
 
     int xi = x;
     for (int i = 0; i < len; i++) {
@@ -4549,16 +4657,21 @@ skip_drawing:;
       int xr = xl + char_width - 1;
       MoveToEx(dc, xl, yt, null);
       LineTo(dc, xr, yb);
+      PERF_COUNT(win_text_selfdraw_line_ops, 1);
 
       xi += char_width;
     }
 
     oldpen = SelectObject(dc, oldpen);
+    PERF_COUNT(win_text_gdi_select_object_calls, 1);
     DeleteObject(oldpen);
+    PERF_COUNT(win_text_gdi_delete_object_calls, 1);
 
     clearclipr();
+    PERF_ADD_TICKS(win_text_selfdraw_vt52_ticks, mintty_perf_ticks() - perf_selfdraw_part_t0);
   }
   else if (boxpower || dectcs) {  // drawn graphics
+    long long perf_selfdraw_part_t0 = mintty_perf_ticks();
     // Box Drawing (U+2500-U+257F)
     // ─━│┃┄┅┆┇┈┉┊┋┌┍┎┏┐┑┒┓└┕┖┗┘┙┚┛├┝┞┟┠┡┢┣┤┥┦┧┨┩┪┫┬┭┮┯┰┱┲┳┴┵┶┷┸┹┺┻┼┽┾┿
     // ╀╁╂╃╄╅╆╇╈╉╊╋╌╍╎╏═║╒╓╔╕╖╗╘╙╚╛╜╝╞╟╠╡╢╣╤╥╦╧╨╩╪╫╬╭╮╯╰╱╲╳╴╵╶╷╸╹╺╻╼╽╾╿
@@ -4592,11 +4705,17 @@ skip_drawing:;
     }
     void linedraw(char l, char t, char r, char b, colour c)
     {
+      PERF_COUNT(win_text_selfdraw_linedraw_calls, 1);
       HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, c));
+      PERF_COUNT(win_text_gdi_create_pen_calls, 1);
+      PERF_COUNT(win_text_gdi_select_object_calls, 1);
       //printf("line %d %d %d %d\n", xi + l, y0 + t, xi + r, y0 + b);
       MoveToEx(dc, xi + l, y0 + t, null);
       LineTo(dc, xi + r, y0 + b);
+      PERF_COUNT(win_text_selfdraw_line_ops, 1);
       DeleteObject(SelectObject(dc, oldpen));
+      PERF_COUNT(win_text_gdi_select_object_calls, 1);
+      PERF_COUNT(win_text_gdi_delete_object_calls, 1);
     }
     void lines(char x1, char y1, char x2, char y2, char x3, char y3)
     {
@@ -4612,13 +4731,19 @@ skip_drawing:;
 
       int w = y3 >= 0 ? line_width : 0;
       HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, w, fg));
+      PERF_COUNT(win_text_gdi_create_pen_calls, 1);
+      PERF_COUNT(win_text_gdi_select_object_calls, 1);
       MoveToEx(dc, xi + _x1, y0 + _y1, null);
       LineTo(dc, xi + _x2, y0 + _y2);
+      PERF_COUNT(win_text_selfdraw_line_ops, 1);
       if (y3 >= 0) {
         MoveToEx(dc, xi + _x3, y0 + _y3 - 1, null);
         LineTo(dc, xi + _x2, y0 + _y2 - 1);
+        PERF_COUNT(win_text_selfdraw_line_ops, 1);
       }
       DeleteObject(SelectObject(dc, oldpen));
+      PERF_COUNT(win_text_gdi_select_object_calls, 1);
+      PERF_COUNT(win_text_gdi_delete_object_calls, 1);
     }
     void trio(char x1, char y1, char x2, char y2, char x3, char y3, bool chord)
     {
@@ -4636,22 +4761,33 @@ skip_drawing:;
 
       HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, fg));
       HBRUSH oldbrush = SelectObject(dc, CreateSolidBrush(fg));
+      PERF_COUNT(win_text_gdi_create_pen_calls, 1);
+      PERF_COUNT(win_text_gdi_create_brush_calls, 1);
+      PERF_COUNT(win_text_gdi_select_object_calls, 2);
       if (chord) {
-        if (lefthalf)
+        if (lefthalf) {
           // Powerline left half circle U+E0B6: trichord(8, 0, 0, 4, 8, 8);
           Chord(dc, xi      , y0 + _y1, xi + 2 * _x1, y0 + _y3,
                     xi + _x1, y0 + _y1, xi + _x3    , y0 + _y3);
-        else
+          PERF_COUNT(win_text_selfdraw_chord_ops, 1);
+        }
+        else {
           // Powerline right half circle U+E0B4: trichord(0, 0, 8, 4, 0, 8);
           Chord(dc, xi - _x2, y0 + _y1, xi + _x2, y0 + _y3,
                     xi + _x3, y0 + _y3, xi + _x1, y0 + _y1);
+          PERF_COUNT(win_text_selfdraw_chord_ops, 1);
+        }
       }
-      else
+      else {
         Polygon(dc, (POINT[]){{xi + _x1, y0 + _y1},
                               {xi + _x2, y0 + _y2},
                               {xi + _x3, y0 + _y3}}, 3);
+        PERF_COUNT(win_text_selfdraw_polygon_ops, 1);
+      }
       DeleteObject(SelectObject(dc, oldbrush));
       DeleteObject(SelectObject(dc, oldpen));
+      PERF_COUNT(win_text_gdi_select_object_calls, 2);
+      PERF_COUNT(win_text_gdi_delete_object_calls, 2);
     }
     void triangle(char x1, char y1, char x2, char y2, char x3, char y3)
     {
@@ -4708,8 +4844,11 @@ skip_drawing:;
       //printf("25XX >%d%%%d %d%%%d %d%%%d %d%%%d\n", cl, dl, ct, dt, cr, dr, cb, db);
       //printf("Rect %d %d %d %d\n", xi + cl_, y0 + ct_, xi + cr_, y0 + cb_);
       HBRUSH br = CreateSolidBrush(c);
-      FillRect(dc, &(RECT){xi + cl_, y0 + ct_, xi + cr_, y0 + cb_}, br);
+      PERF_COUNT(win_text_gdi_create_brush_calls, 1);
+      perf_selfdraw_fillrect(dc, &(RECT){xi + cl_, y0 + ct_, xi + cr_, y0 + cb_}, br);
+      PERF_COUNT(win_text_selfdraw_rect_ops, 1);
       DeleteObject(br);
+      PERF_COUNT(win_text_gdi_delete_object_calls, 1);
       if (dl)
         linedraw(cl, ct, cl, cb, colmix(8 - dl));
       if (dt)
@@ -4739,6 +4878,7 @@ skip_drawing:;
     int heavydelta = min(line_width, 2);
 
     // create common Box Drawing resources
+    long long perf_selfdraw_resource_t0 = mintty_perf_ticks();
     LOGBRUSH brush = (LOGBRUSH){BS_SOLID, fg, 0};
     DWORD style = PS_GEOMETRIC | PS_SOLID;
     HPEN roundpen = ExtCreatePen(style, penwidth, &brush, 0, 0);
@@ -4747,15 +4887,20 @@ skip_drawing:;
     HPEN pen = ExtCreatePen(style, penwidth, &brush, 0, 0);
     HPEN heavypen = ExtCreatePen(style, heavypenwidth, &brush, 0, 0);
     HBRUSH br = CreateSolidBrush(fg);
+    PERF_COUNT(win_text_gdi_create_pen_calls, 3);
+    PERF_COUNT(win_text_gdi_create_brush_calls, 1);
     // save pen and preload default pen for some performance
     HPEN oldpen = SelectObject(dc, pen);
+    PERF_COUNT(win_text_gdi_select_object_calls, 1);
     HPEN curpen = pen;
+    PERF_ADD_TICKS(win_text_selfdraw_resource_ticks, mintty_perf_ticks() - perf_selfdraw_resource_t0);
 
     // set pen on demand
     void setpen(HPEN newpen)
     {
       if (newpen != curpen) {
         SelectObject(dc, newpen);
+        PERF_COUNT(win_text_gdi_select_object_calls, 1);
         curpen = newpen;
       }
     }
@@ -4819,7 +4964,8 @@ skip_drawing:;
             y2 += w - w / 2;
           }
           //printf("fillrect %d/%d..%d/%d\n", x1, y1, x2, y2);
-          FillRect(dc, &(RECT){xi + x1, y0 + y1, xi + x2, y0 + y2}, br);
+          perf_selfdraw_fillrect(dc, &(RECT){xi + x1, y0 + y1, xi + x2, y0 + y2}, br);
+          PERF_COUNT(win_text_selfdraw_rect_ops, 1);
         }
         else {
           // for box border lines, we could use FillRect above 
@@ -4848,9 +4994,12 @@ skip_drawing:;
           //Polyline(dc, (POINT[]){{x1, y1}, {x2, y2}, {x1, y1}}, 3);
           MoveToEx(dc, x1, y1, null);
           LineTo(dc, x2, y2);
+          PERF_COUNT(win_text_selfdraw_line_ops, 1);
           // draw the line back again to compensate for the missing endpoint
-          if (y3 > -3)  // skip for dashed line segments
+          if (y3 > -3) {  // skip for dashed line segments
             LineTo(dc, x1, y1);
+            PERF_COUNT(win_text_selfdraw_line_ops, 1);
+          }
         }
       }
 
@@ -4901,7 +5050,9 @@ skip_drawing:;
       setpen(pen);
       MoveToEx(dc, xi + x1, y0 + y1, null);
       AngleArc(dc, xi + xc, y0 + yc, r, a, 90);
+      PERF_COUNT(win_text_selfdraw_anglearc_ops, 1);
       LineTo(dc, xi + x2, y0 + y2);
+      PERF_COUNT(win_text_selfdraw_line_ops, 1);
     }
 
     setclipr(xi, yclip, len);
@@ -5023,14 +5174,22 @@ skip_drawing:;
     clearclipr();
 
     // remove Box Drawing resources
+    long long perf_selfdraw_teardown_t0 = mintty_perf_ticks();
     SelectObject(dc, oldpen);
+    PERF_COUNT(win_text_gdi_select_object_calls, 1);
     DeleteObject(pen);
     DeleteObject(roundpen);
     DeleteObject(heavypen);
     DeleteObject(br);
+    PERF_COUNT(win_text_gdi_delete_object_calls, 4);
+    PERF_ADD_TICKS(win_text_selfdraw_teardown_ticks, mintty_perf_ticks() - perf_selfdraw_teardown_t0);
+    PERF_ADD_TICKS(win_text_selfdraw_boxpower_ticks, mintty_perf_ticks() - perf_selfdraw_part_t0);
   }
   else if (boxcoded && origtext) {  // VT100/VT52 box drawing and scanlines
+    long long perf_selfdraw_part_t0 = mintty_perf_ticks();
     HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, fg));
+    PERF_COUNT(win_text_gdi_create_pen_calls, 1);
+    PERF_COUNT(win_text_gdi_select_object_calls, 1);
 
     int xi = x;
     for (int i = 0; i < len; i++) {
@@ -5056,6 +5215,7 @@ skip_drawing:;
         for (int l = 0; l < line_width; l++) {
           MoveToEx(dc, x, y + yoff + l, null);
           LineTo(dc, x + len * char_width, y + yoff + l);
+          PERF_COUNT(win_text_selfdraw_line_ops, 1);
         }
       }
       else {  // VT100 box drawing characters ┘┐┌└┼ ─ ├┤┴┬│
@@ -5078,6 +5238,7 @@ skip_drawing:;
           for (int l = 0; l < line_width; l++) {
             MoveToEx(dc, xl, y0 + yoff + l, null);
             LineTo(dc, xr, y0 + yoff + l);
+            PERF_COUNT(win_text_selfdraw_line_ops, 1);
           }
         }
         if (graph & DRAW_VERT) {
@@ -5094,6 +5255,7 @@ skip_drawing:;
           for (int l = 0; l < line_width; l++) {
             MoveToEx(dc, xi + l, yt, null);
             LineTo(dc, xi + l, yb);
+            PERF_COUNT(win_text_selfdraw_line_ops, 1);
           }
         }
       }
@@ -5104,8 +5266,13 @@ skip_drawing:;
     }
 
     oldpen = SelectObject(dc, oldpen);
+    PERF_COUNT(win_text_gdi_select_object_calls, 1);
     DeleteObject(oldpen);
+    PERF_COUNT(win_text_gdi_delete_object_calls, 1);
+    PERF_ADD_TICKS(win_text_selfdraw_boxcoded_ticks, mintty_perf_ticks() - perf_selfdraw_part_t0);
   }
+  if (vt52fraction || boxpower || dectcs || boxcoded)
+    PERF_ADD_TICKS(win_text_selfdraw_ticks, mintty_perf_ticks() - perf_selfdraw_t0);
 
  /* Strikeout */
   if ((attr.attr & ATTR_STRIKEOUT)
@@ -5130,7 +5297,9 @@ skip_drawing:;
 
   if (origtext) {
     // we transfered the orig text pointer to origtext, so we free text
+    long long perf_origtext_free_t0 = mintty_perf_ticks();
     free(text);
+    PERF_ADD_TICKS(win_text_origtext_free_ticks, mintty_perf_ticks() - perf_origtext_free_t0);
   }
 
   show_curchar_info('w');
@@ -5156,17 +5325,23 @@ skip_drawing:;
     printf("painting cursor_type '%c' cursor_on %d\n", "?b_l"[term_cursor_type()+1], term.cursor_on);
 #endif
     HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, _cc));
+    PERF_COUNT(win_text_gdi_create_pen_calls, 1);
+    PERF_COUNT(win_text_gdi_select_object_calls, 1);
     switch (term_cursor_type()) {
       when CUR_BLOCK:  // solid block cursor
         if (attr.attr & TATTR_PASCURS) {
           HBRUSH oldbrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
           Rectangle(dc, x, y, x + char_width, y + cell_height);
+          PERF_COUNT(win_text_selfdraw_rect_ops, 1);
           SelectObject(dc, oldbrush);
+          PERF_COUNT(win_text_gdi_select_object_calls, 2);
         }
       when CUR_BOX: {  // hollow box cursor
         HBRUSH oldbrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
         Rectangle(dc, x, y, x + char_width, y + cell_height);
+        PERF_COUNT(win_text_selfdraw_rect_ops, 1);
         SelectObject(dc, oldbrush);
+        PERF_COUNT(win_text_gdi_select_object_calls, 2);
       }
       when CUR_LINE: {  // vertical line cursor
         int caret_width = cursor_size(cell_width);
@@ -5198,15 +5373,19 @@ skip_drawing:;
           // this does not give us sufficient colour control
           InvertRect(dc, &(RECT){xx, y, xx + caret_width, y + cell_height});
 #else
-          FillRect(dc, &(RECT){xx, y, xx + caret_width, y + cell_height}, br);
+          perf_selfdraw_fillrect(dc, &(RECT){xx, y, xx + caret_width, y + cell_height}, br);
+          PERF_COUNT(win_text_selfdraw_rect_ops, 1);
 #endif
           DeleteObject(br);
+          PERF_COUNT(win_text_gdi_delete_object_calls, 1);
 #endif
         }
         else if (attr.attr & TATTR_PASCURS) {
-          for (int dy = 0; dy < cell_height; dy += 2)
+          for (int dy = 0; dy < cell_height; dy += 2) {
             Polyline(
               dc, (POINT[]){{xx, y + dy}, {xx + caret_width, y + dy}}, 2);
+            PERF_COUNT(win_text_selfdraw_line_ops, 1);
+          }
         }
       }
       when CUR_UNDERSCORE: {  // horizontal line cursor
@@ -5233,20 +5412,28 @@ skip_drawing:;
             int yct = max(yy - up, yt);
             HBRUSH oldbrush = SelectObject(dc, CreateSolidBrush(_cc));
             Rectangle(dc, x, yct, x + char_width, yy + 2);
+            PERF_COUNT(win_text_selfdraw_rect_ops, 1);
             DeleteObject(SelectObject(dc, oldbrush));
+            PERF_COUNT(win_text_gdi_select_object_calls, 1);
+            PERF_COUNT(win_text_gdi_delete_object_calls, 1);
           }
-          else
+          else {
             Rectangle(dc, x, yy - up, x + char_width, yy + 2);
+            PERF_COUNT(win_text_selfdraw_rect_ops, 1);
+          }
         }
         else if (attr.attr & TATTR_PASCURS) {
           for (int dx = 0; dx < char_width; dx += 2) {
             SetPixel(dc, x + dx, yy, _cc);
             SetPixel(dc, x + dx, yy + 1, _cc);
+            PERF_COUNT(win_text_selfdraw_setpixel_ops, 2);
           }
         }
       }
     }
     DeleteObject(SelectObject(dc, oldpen));
+    PERF_COUNT(win_text_gdi_select_object_calls, 1);
+    PERF_COUNT(win_text_gdi_delete_object_calls, 1);
   }
 
   if (bloom && coord_transformed_bloom) {

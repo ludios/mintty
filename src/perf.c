@@ -5,6 +5,8 @@
 #include "perf.h"
 
 #include <winbase.h>
+#include <stdlib.h>
+#include <string.h>
 #include <strings.h>
 
 struct mintty_perf_state mintty_perf;
@@ -202,7 +204,71 @@ mintty_perf_emit_frame(void)
   PUT_U64(win_text_phase1_calls);
   PUT_U64(win_text_phase2_calls);
   PUT_U64(win_text_clearpad_calls);
+  PUT_U64(win_text_boxpower_calls);
+  PUT_U64(win_text_boxpower_chars);
+  PUT_U64(win_text_boxcoded_calls);
+  PUT_U64(win_text_boxcoded_chars);
+  PUT_U64(win_text_vt52fraction_calls);
+  PUT_U64(win_text_vt52fraction_chars);
+  PUT_U64(win_text_dectcs_calls);
+  PUT_U64(win_text_dectcs_chars);
+  PUT_U64(win_text_combining_calls);
+  PUT_U64(win_text_combining_double_calls);
+  PUT_U64(win_text_rtl_calls);
+  PUT_U64(win_text_sea_calls);
+  PUT_U64(win_text_skip_invisible_calls);
+  PUT_U64(win_text_skip_origtext_calls);
+  PUT_U64(win_text_textout_plain_calls);
+  PUT_U64(win_text_textout_combining_calls);
+  PUT_U64(win_text_overstrike_iterations);
   PUT_US(win_text_ticks);
+  PUT_US(win_text_font_resolve_ticks);
+  PUT_US(win_text_attr_colour_ticks);
+  PUT_U64(win_text_origtext_alloc_calls);
+  PUT_U64(win_text_origtext_alloc_chars);
+  PUT_US(win_text_origtext_alloc_ticks);
+  PUT_US(win_text_origtext_free_ticks);
+  PUT_US(win_text_dxs_ticks);
+  PUT_US(win_text_ulen_ticks);
+  PUT_US(win_text_uniscribe_decision_ticks);
+  PUT_US(win_text_background_ticks);
+  PUT_US(win_text_coord_line_ticks);
+  PUT_US(win_text_coord_char_ticks);
+  PUT_US(win_text_bkmode_ticks);
+  PUT_US(win_text_textout_path_ticks);
+  PUT_US(win_text_textout_end_ticks);
+  PUT_US(win_text_coord_restore_ticks);
+  PUT_US(win_text_selfdraw_ticks);
+  PUT_US(win_text_selfdraw_vt52_ticks);
+  PUT_US(win_text_selfdraw_boxpower_ticks);
+  PUT_US(win_text_selfdraw_boxcoded_ticks);
+  PUT_US(win_text_selfdraw_resource_ticks);
+  PUT_US(win_text_selfdraw_teardown_ticks);
+  PUT_U64(win_text_clip_set_calls);
+  PUT_U64(win_text_clip_clear_calls);
+  PUT_US(win_text_clip_ticks);
+  PUT_U64(win_text_selfdraw_fillrect_calls);
+  PUT_U64(win_text_selfdraw_fillrect_pixels);
+  PUT_US(win_text_selfdraw_fillrect_ticks);
+  PUT_U64(win_text_selfdraw_linedraw_calls);
+  PUT_U64(win_text_selfdraw_line_ops);
+  PUT_U64(win_text_selfdraw_rect_ops);
+  PUT_U64(win_text_selfdraw_polygon_ops);
+  PUT_U64(win_text_selfdraw_chord_ops);
+  PUT_U64(win_text_selfdraw_anglearc_ops);
+  PUT_U64(win_text_selfdraw_setpixel_ops);
+  PUT_U64(win_text_gdi_create_pen_calls);
+  PUT_U64(win_text_gdi_create_brush_calls);
+  PUT_U64(win_text_gdi_create_rgn_calls);
+  PUT_U64(win_text_gdi_delete_object_calls);
+  PUT_U64(win_text_gdi_select_object_calls);
+  PUT_U64(win_text_gdi_select_clip_calls);
+  PUT_U64(set_bk_mode_calls);
+  PUT_US(set_bk_mode_ticks);
+  PUT_U64(set_dc_brush_color_calls);
+  PUT_US(set_dc_brush_color_ticks);
+  PUT_U64(fill_background_calls);
+  PUT_US(fill_background_ticks);
   PUT_U64(select_font_calls);
   PUT_US(select_font_ticks);
   PUT_U64(set_text_color_calls);
@@ -216,6 +282,7 @@ mintty_perf_emit_frame(void)
 
   PUT_U64(text_out_start_calls);
   PUT_U64(text_out_start_chars);
+  PUT_US(text_out_start_ticks);
   PUT_U64(uniscribe_analyse_calls);
   PUT_U64(uniscribe_analyse_chars);
   PUT_U64(uniscribe_analyse_failures);
