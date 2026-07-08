@@ -1,3 +1,11 @@
+This is an fork of https://github.com/mintty/mintty where the rendering has been significantly optimized via a lot of iterations with Claude Fable 5 and ChatGPT 5.5 Thinking + Pro.
+
+Memory usage has increased due to rendering to a 32bpp DIB.
+
+Use at your own risk.
+
+<hr>
+
 Mintty is the [Cygwin](http://cygwin.com) Terminal, 
 as well as the 
 [terminal emulator](http://en.wikipedia.org/wiki/Terminal_emulator) 
