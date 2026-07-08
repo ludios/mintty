@@ -84,7 +84,6 @@ struct mintty_perf_frame {
   uint64_t run_breaks_clean_cell;
   uint64_t run_breaks_ascii_boundary;
   uint64_t run_breaks_bidi;
-  uint64_t run_breaks_bloom;
   uint64_t bidi_class_calls;
   uint64_t bidi_ascii_cells;
   uint64_t bidi_nonascii_cells;
