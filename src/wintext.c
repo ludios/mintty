@@ -4055,19 +4055,9 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
 
   wchar * origtext = 0;
   if (boxpower || boxcoded || dectcs) {
-    // keep orig text in separate ref
-    PERF_COUNT(win_text_origtext_alloc_calls, 1);
-    PERF_COUNT(win_text_origtext_alloc_chars, len);
-    long long perf_origtext_alloc_t0 = mintty_perf_ticks();
+    /* Self-drawn graphics skip the normal text-output path below. Keep a
+       pointer to the original run without allocating a dummy text buffer. */
     origtext = text;
-    text = newn(wchar, len);
-    PERF_ADD_TICKS(win_text_origtext_alloc_ticks, mintty_perf_ticks() - perf_origtext_alloc_t0);
-    // clear font glyphs under self-drawn geometric symbols
-    // - this method of clearing background is no longer in use since 3.7.8
-    // - keeping it in for now just in case; should be cleaned up later
-    for (int i = 0; i < len; i++)
-      //text[i] = ' ';
-      text[i] = 'X';  // make accidental use of this feature apparent
   }
 
  /* Array with offsets between neighbouring characters */
@@ -5445,13 +5435,6 @@ skip_drawing:;
   }
 
   _return:
-
-  if (origtext) {
-    // we transfered the orig text pointer to origtext, so we free text
-    long long perf_origtext_free_t0 = mintty_perf_ticks();
-    free(text);
-    PERF_ADD_TICKS(win_text_origtext_free_ticks, mintty_perf_ticks() - perf_origtext_free_t0);
-  }
 
   show_curchar_info('w');
 
