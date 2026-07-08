@@ -4220,6 +4220,13 @@ term_paint(void)
         else
           PERF_COUNT(paint_out_text_nonascii_chars, 1);
       }
+      cattrflags split_flags = ATTR_ITALIC | TATTR_COMBDOUBL | TATTR_OVERHANG | TATTR_MARKCURS;
+      int out_findex = (attr.attr & FONTFAM_MASK) >> ATTR_FONTFAM_SHIFT;
+      if (out_findex > 10)
+        /* Self-drawn graphics are cell-clipped graphics rather than font
+           glyphs, so italic/overhang overlay splitting only adds an extra
+           background pass. Keep cursor-mark splitting intact. */
+        split_flags = TATTR_MARKCURS;
 #ifdef debug_out_text
       wchar t[len + 1]; wcsncpy(t, text, len); t[len] = 0;
       for (int i = len - 1; i >= 0 && t[i] == ' '; i--)
@@ -4313,9 +4320,7 @@ term_paint(void)
       else if (overlaying) {
         return;
       }
-      else if (attr.attr
-          & (ATTR_ITALIC | TATTR_COMBDOUBL | TATTR_OVERHANG | TATTR_MARKCURS)
-        )
+      else if (attr.attr & split_flags)
       {
         /* Split output into 2 phases, for background and foreground, 
            to support overlay display in some cases:
