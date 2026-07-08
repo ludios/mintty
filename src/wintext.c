@@ -1962,6 +1962,15 @@ do_update(void)
 
   // Update scrollbar
   perf_t0 = mintty_perf_ticks();
+ /* Skip the call when nothing changed: SetScrollInfo redraws the
+    scrollbar synchronously even when passed identical values, which
+    measures at more than a millisecond per display update. The cached
+    values are only trusted while this branch remains the sole writer
+    of SB_VERT: whenever the branch is not taken (scrollbar hidden or
+    taken over by an application scrollbar via DECSET 30 handling), the
+    cache is invalidated so the next update writes unconditionally. */
+  static bool scrollinfo_cached = false;
+  static int scrollinfo_max, scrollinfo_page, scrollinfo_pos;
   if (cfg.scrollbar && term.show_scrollbar && !term.app_scrollbar) {
     int lines = sblines();
     SCROLLINFO si = {
@@ -1972,7 +1981,21 @@ do_update(void)
       .nPage = term.rows,
       .nPos = lines + term.disptop
     };
-    SetScrollInfo(wnd, SB_VERT, &si, true);
+    if (!scrollinfo_cached
+        || si.nMax != scrollinfo_max
+        || (int)si.nPage != scrollinfo_page
+        || si.nPos != scrollinfo_pos
+       )
+    {
+      SetScrollInfo(wnd, SB_VERT, &si, true);
+      scrollinfo_cached = true;
+      scrollinfo_max  = si.nMax;
+      scrollinfo_page = (int)si.nPage;
+      scrollinfo_pos  = si.nPos;
+    }
+  }
+  else {
+    scrollinfo_cached = false;
   }
   PERF_ADD_TICKS(scrollbar_ticks, mintty_perf_ticks() - perf_t0);
 
