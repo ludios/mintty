@@ -5198,9 +5198,42 @@ skip_drawing:;
       PERF_COUNT(win_text_selfdraw_line_ops, 1);
     }
 
+    void hline_fill_run(int ymid, int width, int cells)
+    {
+      int top = ymid - width / 2;
+      int bottom = ymid + width - width / 2;
+      perf_selfdraw_fillrect(dc, &(RECT){xi, y0 + top, xi + cells * char_width, y0 + bottom}, br);
+      PERF_COUNT(win_text_selfdraw_rect_ops, 1);
+    }
+    void boxhline_run(bool heavy, int cells)
+    {
+      hline_fill_run(char_height / 2, heavy ? heavypenwidth : penwidth, cells);
+    }
+    void boxdhline_run(int cells)
+    {
+      hline_fill_run(char_height / 2 - line_width, penwidth, cells);
+      hline_fill_run(char_height / 2 + line_width, penwidth, cells);
+    }
+
     setclipr(xi, yclip, len);
     for (int i = 0; i < len; i++) {
       //setclipr(xi, yclip, 1);
+
+      if (boxpower && i + 1 < len &&
+          (origtext[i] == 0x2500 || origtext[i] == 0x2501 || origtext[i] == 0x2550)) {
+        int run = 1;
+        while (i + run < len && origtext[i + run] == origtext[i])
+          run++;
+        if (run > 1) {
+          if (origtext[i] == 0x2550)
+            boxdhline_run(run);
+          else
+            boxhline_run(origtext[i] == 0x2501, run);
+          xi += run * char_width;
+          i += run - 1;
+          continue;
+        }
+      }
 
       switch (origtext[i]) {
         // Box Drawing (U+2500-U+257F)
