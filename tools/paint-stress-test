@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+#
+# Model-output: Claude Fable 5
+#
+# paint-stress-test
+#
+# Exercises every code path guarded by the paint_dc_busy counter and the
+# direct-fill fast path of the patched mintty, inside a DEBUG build
+# (make DEBUG=1), where win_fill_rect cross-checks the counter against
+# the actual DC state on every direct fill and asserts on mismatch.
+#
+# Usage:
+#   1. cd src && make clean && make -j DEBUG=1
+#   2. start that binary, e.g.:
+#        ./bin/cygwin64/mintty.exe -o Ligatures=0 -o DisplaySpeedup=0 &
+#      and inside it run:  ./tools/paint-stress-test
+#   3. run it once more in a bloom-enabled instance:
+#        ./bin/cygwin64/mintty.exe -o Bloom=2 &
+#      (Bloom is a config option, not togglable by escape sequence.)
+#
+# Success: the script runs to the final banner and the terminal survives.
+# Failure: an unbalanced transform/clip pair trips the assert; Cygwin
+# prints "assertion ... failed" and the mintty process aborts - loud by
+# design. Also eyeball the two known visual corners printed in sections
+# 9 and 10 (box joints at large fonts; italics adjacent to box art).
+
+set -u
+
+e=$'\e'
+
+# print one escape-initiated string without a trailing newline.
+#   $1: string to emit verbatim (may contain escape sequences)
+emit() {
+	printf '%b' "$1"
+}
+
+# print a section banner and give the compositor a beat, so each
+# section lands in at least one distinct display update.
+#   $1: section number   $2: description of the exercised path
+section() {
+	sleep 0.15
+	printf '\n%b== %s: %s%b\n' "$e[1;33m" "$1" "$2" "$e[0m"
+	sleep 0.15
+}
+
+# emit one line of coloured box-drawing art bracketed by text.
+#   $1: SGR colour parameters for the line-art segment (e.g. "38;5;39")
+box_line() {
+	emit "text $e[$1m┌──┬──╥──┐ ━━━ ═══ ┠─╂─┨$e[0m text\n"
+}
+
+# 1: plain backgrounds and blank runs - clear_run through the CPU path.
+plain_fills() {
+	section 1 "plain text, colour backgrounds, blank runs (CPU fills)"
+	for c in 41 42 44 45 100 103; do
+		emit "$e[${c}m padded background block $e[0m    trailing blanks\n"
+	done
+}
+
+# 2: straight box art - clip-free self-drawn path, batched ─ ━ ═ runs,
+# and double-height/width line attributes.
+straight_boxes() {
+	section 2 "straight box art, batched horizontal runs, DECDWL/DECDHL"
+	box_line "38;5;39"
+	emit "$e[32m────────────────  ━━━━━━━━━━━━━━━━  ════════════════$e[0m\n"
+	emit "$e[36m│ ┃ ║ ├┤ ┬┴ ┼ ╬ ╠╣ ╦╩ ╔╗╚╝ ┏┓┗┛ ┌┐└┘$e[0m\n"
+	emit "${e}#6double width line with ─── box art ━━━\n"
+	emit "${e}#3double height ── top\n"
+	emit "${e}#4double height ── bottom\n"
+	emit "${e}#5"
+}
+
+# 3: glyphs that force the self-drawn clip region (setclipr/clearclipr
+# pair): rounded corners, diagonals, Powerline shapes.
+clipped_boxes() {
+	section 3 "clip-forcing glyphs: rounded corners, diagonals, Powerline"
+	emit "$e[35m╭──────╮  ╱╲ ╳ ╲╱  ╰──────╯$e[0m\n"
+	emit "$e[44;97m segment $e[0;34m\xee\x82\xb0$e[0m plain $e[7m\xee\x82\xb2 reverse $e[0m\n"
+}
+
+# 4: block elements and shades - rectdraw fills plus colmix edge lines.
+blocks_and_shades() {
+	section 4 "block elements and shades (rectdraw + colmix edges)"
+	emit "▁▂▃▄▅▆▇█ ▏▎▍▌▋▊▉ ▀▐▔▕ ▖▗▘▙▚▛▜▝▞▟\n"
+	for fg in 31 32 33 34 35 36; do
+		emit "$e[${fg};47m░░▒▒▓▓$e[0m "
+	done
+	emit "\n"
+}
+
+# 5: truecolour gradient over shades and box strokes - hundreds of
+# distinct pen/brush colours to overflow the drawn-graphics caches and
+# exercise the frame-start reset.
+cache_overflow() {
+	section 5 "truecolour gradient (cache overflow + reset)"
+	local i r g b
+	for i in $(seq 0 299); do
+		r=$(( (i * 17)  % 256 ))
+		g=$(( (i * 101) % 256 ))
+		b=$(( 255 - (i * 7) % 256 ))
+		emit "$e[38;2;${r};${g};${b}m▒│$e[0m"
+		if (( i % 60 == 59 )); then
+			emit "\n"
+			sleep 0.05
+		fi
+	done
+	emit "\n"
+}
+
+# 6: curly underline - the IntersectClipRect/SelectClipRgn pair.
+curly() {
+	section 6 "curly underline clip pair"
+	emit "$e[4:3mcurly underlined text over    blanks and │─ box art$e[0m\n"
+	emit "$e[4:3;58;5;196mcoloured curly$e[0m  $e[4mplain$e[0m  $e[21mdouble$e[0m\n"
+}
+
+# 7: shadow attribute (SGR 1:2) - layered draw loop with transforms.
+shadow() {
+	section 7 "shadow layers (SGR 1:2)"
+	emit "$e[1:2mshadowed text with │ box ─ art$e[0m and $e[1mbold overstrike$e[0m\n"
+}
+
+# 8: narrowed/expanded glyphs - the zoom transform pair
+# (coord_transformed2) around scaled glyph output.
+zoomed_glyphs() {
+	section 8 "auto-narrowed/expanded glyphs (zoom transform)"
+	emit "watch ⌚ hourglass ⌛ alarm ⏰ timer ⏲ roman Ⅷ Ⅻ enclosed ① ⑳ ㊿\n"
+	emit "arrows ⇒ ⇔ sums ∑ ∫ shapes ◆ ● ■ powers ⏻ ⏼\n"
+}
+
+# 9: RTL presentation mode (SPD, CSI 3 SP S) - the line mirror
+# transform; fills on these lines must take the GDI fallback. Also the
+# large-font joint check target.
+rtl_mirror() {
+	section 9 "RTL presentation (SPD) with box art, shades and curly"
+	emit "$e[3 S"
+	emit "עברית שלום │─┌┐ ░▒▓ עולם\n"
+	emit "$e[4:3mمرحبا بالعالم$e[0m ━━ ═══ ╭╮\n"
+	emit "$e[44mrtl line with background fill$e[0m\n"
+	emit "$e[0 S"
+	emit "back to LTR. Also zoom this window to a large font (Ctrl +)\n"
+	emit "and check ├─┼─┤ joints for gaps:  ├─┼─┤ ┣━╋━┫ ╠═╬═╣\n"
+}
+
+# 10: italic text adjacent to self-drawn glyphs - the overlay-split
+# change's visual corner (glyph overhang over box cells).
+italic_overlay() {
+	section 10 "italics adjacent to box art (overlay split corner)"
+	emit "$e[3mitalic$e[0m│$e[3mitalic$e[0m─$e[3mfff WWW$e[0m┃ edges\n"
+	emit "│$e[3;33mVAVAVA$e[0m│ $e[3mjjj qqq$e[0m╱ overhang\n"
+}
+
+# 11: combining and composed-combining characters (comcom exemption).
+combining() {
+	section 11 "combining marks and composed combining (Thai SARA AM)"
+	emit "e\xcc\x81 a\xcc\x88 base+marks; thai: ab\xe0\xb8\xb3cd digits 1\xe0\xb8\xb3x\n"
+}
+
+# 12: emoji line - only meaningful with emoji graphics deployed;
+# harmless otherwise.
+emoji() {
+	section 12 "emoji (only if graphics deployed)"
+	emit "emoji: 🙂 🚀 1️⃣ ok\n"
+}
+
+# 13: alternate screen round trip and a fast full-screen scroll to
+# stress buffered updates, span blits and the stale-buffer transitions.
+stress() {
+	section 13 "alt screen round trip + fast scroll stress"
+	emit "$e[?1049h$e[2J$e[H"
+	local i
+	for i in $(seq 1 200); do
+		emit "alt $i ═══ │ ░▒▓ $e[3$((i % 7 + 1))m━━━━━━━━$e[0m line\n"
+	done
+	sleep 0.4
+	emit "$e[?1049l"
+	for i in $(seq 1 300); do
+		emit "scroll $i ┌─┐ ▒▒ ⌚ $e[9$((i % 7 + 1))mCOLOUR$e[0m /path/to/file-$i.c\n"
+	done
+}
+
+main() {
+	plain_fills
+	straight_boxes
+	clipped_boxes
+	blocks_and_shades
+	cache_overflow
+	curly
+	shadow
+	zoomed_glyphs
+	rtl_mirror
+	italic_overlay
+	combining
+	emoji
+	stress
+	sleep 0.3
+	printf '\n%b== ALL SECTIONS EMITTED - if you can read this, no assert fired ==%b\n' \
+	       "$e[1;32m" "$e[0m"
+	printf 'Repeat once in an instance started with -o Bloom=2 for the bloom pair.\n'
+}
+
+main "$@"
