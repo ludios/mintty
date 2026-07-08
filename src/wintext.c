@@ -5222,7 +5222,25 @@ skip_drawing:;
       hline_fill_run(char_height / 2 + line_width, penwidth, cells);
     }
 
-    setclipr(xi, yclip, len);
+    bool boxpower_char_clip_safe(wchar ch)
+    {
+      if (ch == ' ')
+        return true;
+      if (ch >= 0x2580 && ch <= 0x259F)
+        return true;
+      if (ch >= 0x2500 && ch <= 0x257F)
+        return !(ch >= 0x256D && ch <= 0x2573);
+      return false;
+    }
+    bool need_clip = true;
+    if (boxpower) {
+      need_clip = false;
+      for (int i = 0; i < len && !need_clip; i++) {
+        need_clip = !boxpower_char_clip_safe(origtext[i]);
+      }
+    }
+    if (need_clip)
+      setclipr(xi, yclip, len);
     for (int i = 0; i < len; i++) {
       //setclipr(xi, yclip, 1);
 
@@ -5354,7 +5372,8 @@ skip_drawing:;
 
       xi += char_width;
     }
-    clearclipr();
+    if (need_clip)
+      clearclipr();
 
     // remove Box Drawing resources
     long long perf_selfdraw_teardown_t0 = mintty_perf_ticks();
