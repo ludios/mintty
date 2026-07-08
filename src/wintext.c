@@ -733,6 +733,17 @@ wcw_flush(void)
   memset(wcw_cache, 0, sizeof wcw_cache);
 }
 
+static HFONT   paint_buf_font = 0;      // font selected in paint_buf_dc
+static bool    paint_buf_font_ok = false;  // paint_buf_font is trustworthy
+
+/* Forget the cached font selection (buffer drop, font recreation). */
+static void
+win_select_font_reset(void)
+{
+  paint_buf_font    = 0;
+  paint_buf_font_ok = false;
+}
+
 /*
  * Initialise all the fonts of a font family we will need initially:
    Normal (the ordinary font), and optionally bold and underline;
@@ -1317,46 +1328,11 @@ static bool ime_open = false;
 static HDC     paint_buf_dc = 0;        // memory DC of the back buffer
 static HBITMAP paint_buf_bm = 0;        // bitmap selected into paint_buf_dc
 static uint *  paint_buf_bits = 0;      // DIB pixel store (0: plain bitmap)
-static HRGN    paint_buf_scratch_rgn = 0;  // scratch for clip presence query
+#ifndef NDEBUG
+static HRGN    paint_buf_scratch_rgn = 0;  // scratch for debug clip check
+#endif
 static int     paint_dc_busy = 0;       // transform/clip nesting depth on dc
-static HFONT   paint_buf_font = 0;      // font selected in paint_buf_dc
-static bool    paint_buf_font_ok = false;  // paint_buf_font is trustworthy
 
-/*
- * Select font f into the global dc, skipping the call when f is
- * already selected. The skip only applies while painting is routed to
- * the private, persistent back buffer DC, whose selected font nobody
- * else changes: all font selection in the paint path goes through this
- * function, the GDI+ emoji path restores the DC state it touches, and
- * measurement helpers use their own DCs. On the shared window DC
- * (unbuffered painting), whose state resets with every GetDC, the
- * selection is always issued. The cache is invalidated when the buffer
- * is dropped and when fonts are recreated (win_init_fontfamily), the
- * latter also guarding against GDI handle reuse after font deletion.
- */
-static void
-win_select_font(HFONT f)
-{
-  if (paint_buffered) {
-    assert(dc == paint_buf_dc);
-    if (paint_buf_font_ok && f == paint_buf_font) {
-      return;
-    }
-    SelectObject(dc, f);
-    paint_buf_font    = f;
-    paint_buf_font_ok = true;
-    return;
-  }
-  SelectObject(dc, f);
-}
-
-/* Forget the cached font selection (buffer drop, font recreation). */
-static void
-win_select_font_reset(void)
-{
-  paint_buf_font    = 0;
-  paint_buf_font_ok = false;
-}
 
 /*
  * Track whether a world transform or clip region is active on the
@@ -1387,6 +1363,35 @@ static int     paint_buf_h  = 0;        // back buffer height (pixels)
 static bool    paint_buf_stale = true;  // buffer lags the displines cache
 static bool    paint_buffered  = false; // painting currently routed to buffer
 static HDC     paint_win_dc = 0;        // window DC while routed to buffer
+
+/*
+ * Select font f into the global dc, skipping the call when f is
+ * already selected. The skip only applies while painting is routed to
+ * the private, persistent back buffer DC, whose selected font nobody
+ * else changes: all font selection in the paint path goes through this
+ * function, the GDI+ emoji path restores the DC state it touches, and
+ * measurement helpers use their own DCs. On the shared window DC
+ * (unbuffered painting), whose state resets with every GetDC, the
+ * selection is always issued. The cache is invalidated when the buffer
+ * is dropped and when fonts are recreated (win_init_fontfamily), the
+ * latter also guarding against GDI handle reuse after font deletion.
+ */
+static void
+win_select_font(HFONT f)
+{
+  if (paint_buffered) {
+    assert(dc == paint_buf_dc);
+    if (paint_buf_font_ok && f == paint_buf_font) {
+      return;
+    }
+    SelectObject(dc, f);
+    paint_buf_font    = f;
+    paint_buf_font_ok = true;
+    return;
+  }
+  SelectObject(dc, f);
+}
+
 static int     paint_dirty_top = 0;     // first character row painted (incl.)
 static int     paint_dirty_bot = -1;    // last character row painted (incl.)
 
