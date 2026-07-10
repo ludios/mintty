@@ -4221,10 +4221,13 @@ term_paint(void)
       }
       cattrflags split_flags = ATTR_ITALIC | TATTR_COMBDOUBL | TATTR_OVERHANG | TATTR_MARKCURS;
       int out_findex = (attr.attr & FONTFAM_MASK) >> ATTR_FONTFAM_SHIFT;
-      if (out_findex > 10)
-        /* Self-drawn graphics are cell-clipped graphics rather than font
-           glyphs, so italic/overhang overlay splitting only adds an extra
-           background pass. Keep cursor-mark splitting intact. */
+      bool fully_selfdrawn = out_findex == 11 || out_findex == 12
+                             || out_findex == 14;
+      if (fully_selfdrawn)
+        /* Fully self-drawn graphics are cell-clipped rather than font glyphs,
+           so italic/overhang overlay splitting only adds a background pass.
+           Family 13 still draws its numerator as text and must retain normal
+           overhang handling. Keep cursor-mark splitting intact. */
         split_flags = TATTR_MARKCURS;
 #ifdef debug_out_text
       wchar t[len + 1]; wcsncpy(t, text, len); t[len] = 0;
