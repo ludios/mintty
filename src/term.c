@@ -3198,15 +3198,14 @@ term_paint(void)
     term.cursor_on && !term.show_other_screen
     ? term.curs.y - term.disptop : -1;
 
- /* Whether ASCII output chunks are rendered without Uniscribe shaping:
-  * with FontRender=textout all output uses plain ExtTextOutW, and with
-  * Ligatures=0 chunks of plain printable ASCII in the primary font take
-  * the plain ExtTextOutW path (win_text). Splitting or merging chunks
-  * between two such characters then cannot change their rendering, as
-  * per-cell advances are enforced either way; this enables merging of
-  * output chunks below.
+ /* Conditions under which printable ASCII is rendered without
+  * Uniscribe shaping. FontRender=textout applies to every font family;
+  * Ligatures=0 applies only to the primary font because alternate fonts
+  * retain Uniscribe fallback in win_text. Run merging below must use the
+  * same effective-font predicate as the renderer.
   */
-  bool unshaped_ascii = cfg.font_render == FR_TEXTOUT || cfg.ligatures == 0;
+  bool textout_rendering = cfg.font_render == FR_TEXTOUT;
+  bool primary_ascii_unshaped = cfg.ligatures == 0;
 
   int nlines_progress = 0;
   int total_progress = 0;
@@ -4167,7 +4166,7 @@ term_paint(void)
     char has_rtl = 0;
     char has_sea = 0;  // South East Asian script
     uchar bc = 0;
-    bool prev_ascii = false;  // previous char was unshaped-ASCII eligible
+    bool prev_unshaped_ascii = false;
     bool dirty_run = (line->lattr != displine->lattr);
     bool dirty_line = dirty_run;
     bool perf_line_dirty = dirty_line;
@@ -4498,13 +4497,17 @@ term_paint(void)
       }
 
       bool tascii = tchar >= ' ' && tchar <= '~';
+      bool tunshaped_ascii = tascii
+                             && (textout_rendering
+                                 || (primary_ascii_unshaped
+                                     && !(tattr.attr & FONTFAM_MASK)));
       if (tascii)
         PERF_COUNT(bidi_ascii_cells, 1);
       else
         PERF_COUNT(bidi_nonascii_cells, 1);
 
       uchar tbc;
-      if (unshaped_ascii && textlen && tascii && prev_ascii) {
+      if (textlen && tunshaped_ascii && prev_unshaped_ascii) {
         /* The run-breaking logic below deliberately ignores bidi class
            changes between two unshaped printable ASCII characters, so avoid
            the full Unicode range lookup for the overwhelmingly common case. */
@@ -4516,18 +4519,16 @@ term_paint(void)
         tbc = bidi_class(xtchar);
       }
 
-     /* When ASCII is rendered without shaping (see unshaped_ascii),
-      * the class-change breaks below serve no purpose between two ASCII
-      * characters, so they are skipped for such pairs; this merges e.g.
-      * file paths and numbers into single output chunks, reducing
-      * per-chunk output overhead during full-screen repaints.
-      * Conversely, ASCII is then kept out of shaped chunks entirely by
-      * breaking at ASCII/non-ASCII boundaries, so that merged chunks
-      * remain pure ASCII and take the unshaped ExtTextOutW path.
+     /* Bidi class changes serve no purpose between two printable ASCII
+      * characters that the effective font renders without shaping, so skip
+      * those breaks and merge paths and numbers into larger output chunks.
+      * Keep such ASCII out of shaped chunks by breaking at the eligibility
+      * boundary. Alternate-font ASCII remains shaped when Ligatures=0 and
+      * therefore retains the original bidi-class run boundaries.
       * Composed combining characters are exempt from the forced break
       * as they must stay in one chunk with their predecessor (below).
       */
-      if (unshaped_ascii && textlen && tascii != prev_ascii
+      if (textlen && tunshaped_ascii != prev_unshaped_ascii
           && !is_comcom(tchar)
          ) {
         PERF_COUNT(run_breaks_ascii_boundary, 1);
@@ -4553,7 +4554,7 @@ term_paint(void)
         }
       }
       bc = tbc;
-      prev_ascii = tascii;
+      prev_unshaped_ascii = tunshaped_ascii;
 
      /* Flush previous output chunk on break_run */
       if (break_run) {
