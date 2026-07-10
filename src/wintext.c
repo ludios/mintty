@@ -1919,6 +1919,11 @@ win_paint_buffer_begin(void)
   paint_buffered = true;
   // bound any push/pop imbalance to a single frame
   paint_dc_busy = 0;
+  /* One flush per frame: operations on DIB-section DCs execute
+     unbatched (empirically: SelectObject/ExtTextOut on this DC cost a
+     kernel transition each), so per-fill flushing is redundant; this
+     single flush covers any operations still pending from elsewhere. */
+  GdiFlush();
   // reset the dirty row span; win_text extends it as it paints
   paint_dirty_top = term_allrows;
   paint_dirty_bot = -1;
@@ -2022,9 +2027,6 @@ win_fill_rect(const RECT * r, colour c)
       if (left >= right || top >= bottom) {
         return;
       }
-      // Complete all GDI drawing to the DIB before accessing its pixel
-      // store directly, as required for synchronization with GDI.
-      GdiFlush();
       // BI_RGB 32bpp stores 0x00RRGGBB words; colour is COLORREF
       // 0x00BBGGRR, so swap the red and blue channels
       uint pix = ((c & 0xFFu) << 16) | (c & 0xFF00u) | ((c >> 16) & 0xFFu);
