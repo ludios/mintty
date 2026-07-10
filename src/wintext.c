@@ -744,6 +744,8 @@ win_select_font_reset(void)
   paint_buf_font_ok = false;
 }
 
+static void paint_buffer_deselect_font(void);
+
 /*
  * Initialise all the fonts of a font family we will need initially:
    Normal (the ordinary font), and optionally bold and underline;
@@ -772,9 +774,9 @@ win_init_fontfamily(HDC dc, int findex)
   }
   // fonts and metrics are about to change; memoised widths go stale
   wcw_flush();
-  // font handles are about to be deleted and may be reallocated at the
-  // same values; forget the cached selection
-  win_select_font_reset();
+  // A font selected into the persistent buffer DC cannot be deleted.
+  // Deselect it before dropping the handles, then invalidate the cache.
+  paint_buffer_deselect_font();
   ff->cached = false;
   for (uint i = 0; i < FONT_MAXNO; i++) {
     if (ff->fonts[i]) {
@@ -1363,6 +1365,21 @@ static int     paint_buf_h  = 0;        // back buffer height (pixels)
 static bool    paint_buf_stale = true;  // buffer lags the displines cache
 static bool    paint_buffered  = false; // painting currently routed to buffer
 static HDC     paint_win_dc = 0;        // window DC while routed to buffer
+
+/*
+ * Select a stock font into the persistent buffer DC before application
+ * fonts are deleted. DeleteObject fails while an HFONT remains selected
+ * into a DC, and the old handle would otherwise be lost during reinit.
+ */
+static void
+paint_buffer_deselect_font(void)
+{
+  assert(!paint_buffered);
+  if (paint_buf_dc) {
+    SelectObject(paint_buf_dc, GetStockObject(SYSTEM_FONT));
+  }
+  win_select_font_reset();
+}
 
 /*
  * Select font f into the global dc, skipping the call when f is
