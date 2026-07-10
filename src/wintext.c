@@ -1868,8 +1868,16 @@ win_paint_buffer_begin(void)
     paint_buf_stale = true;
   }
   if (paint_buf_stale) {
-    // the buffer missed painting (startup, resize, or directly painted
-    // frames); force a full repaint into it before it gets blitted
+    /* Initialise the terminal viewport, including its padding, before the
+       forced repaint. Do not copy from the window DC here: do_update may
+       have a horizontal-scroll world transform active on that DC. Graphic
+       backgrounds repaint this seed; a failed or absent background leaves
+       the same solid padding colour used by win_paint. */
+    int paint_bottom = h - (win_search_visible() ? SEARCHBAR_HEIGHT : 0);
+    RECT viewport = {0, OFFSET, w, paint_bottom};
+    colour bg = colours[term.rvideo ? FG_COLOUR_I : BG_COLOUR_I];
+    SetDCBrushColor(paint_buf_dc, bg);
+    FillRect(paint_buf_dc, &viewport, GetStockObject(DC_BRUSH));
     PERF_COUNT(buffer_stale_full_repaint, 1);
     term_invalidate(0, 0, term.cols - 1, term_allrows - 1);
     paint_buf_stale = false;
@@ -1895,14 +1903,14 @@ win_paint_buffer_begin(void)
 /*
  * Finish a buffered paint: point the global dc back at the window
  * target and transfer the painted rows from the buffer to the window
- * in one blit. Only the dirty row span recorded by win_text is
- * transferred, padded by one row on each side to cover pixels painted
- * outside the nominal row (double-height glyphs of LATTR_BOT lines
- * reach one row up; glyph overhang spills a few pixels). Rows never
- * blitted keep their identical window content, so restricting the blit
- * is loss-free. Clip regions already set on the window DC (search bar
- * exclusion, WM_PAINT update region) restrict the blit just as they
- * restricted direct painting before.
+ * in one blit. The row span is padded by one row on each side to cover
+ * double-height glyphs and vertical overhang. Transfer the full client
+ * width because edge runs can paint into the horizontal padding. Include
+ * the top or bottom client padding when the corresponding edge rows are
+ * covered; image backgrounds deliberately extend into those areas.
+ * Clip regions already set on the window DC (search bar exclusion,
+ * WM_PAINT update region) restrict the blit just as they restricted
+ * direct painting before.
  */
 static void
 win_paint_buffer_end(void)
@@ -1917,10 +1925,20 @@ win_paint_buffer_end(void)
   assert(paint_dirty_top <= paint_dirty_bot);
   int top = max(0, paint_dirty_top - 1);
   int bot = min(term_allrows, paint_dirty_bot + 2);  // exclusive
-  int x = PADDING;
-  int y = OFFSET + PADDING + top * cell_height;
-  int w = cell_width  * term.cols;
-  int h = cell_height * (bot - top);
+  int x = 0;
+  int y = top ? OFFSET + PADDING + top * cell_height : OFFSET;
+  int paint_bottom = paint_buf_h -
+                     (win_search_visible() ? SEARCHBAR_HEIGHT : 0);
+  int bottom = OFFSET + PADDING + bot * cell_height;
+  if (paint_dirty_bot >= term.rows - 1 || bot == term_allrows) {
+    bottom = paint_bottom;
+  }
+  bottom = min(bottom, paint_bottom);
+  int w = paint_buf_w;
+  int h = bottom - y;
+  if (w <= 0 || h <= 0) {
+    return;
+  }
   PERF_SET(paint_dirty_top, paint_dirty_top);
   PERF_SET(paint_dirty_bot, paint_dirty_bot);
   PERF_COUNT(bitblt_calls, 1);
@@ -6934,6 +6952,9 @@ win_paint(void)
 
     DeleteObject(SelectObject(dc, oldbrush));
     DeleteObject(SelectObject(dc, oldpen));
+    // Padding was painted directly after any buffered terminal update.
+    // Seed it back into the buffer before the next full-width row blit.
+    paint_buf_stale = true;
 #ifdef debug_padding_background
     // show visualized background for testing
     usleep(900000);
