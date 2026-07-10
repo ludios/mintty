@@ -120,6 +120,7 @@ extern void win_font_cs_reconfig(bool font_changed);
 extern void win_keep_screen_on(bool);
 
 extern void win_update_scrollbar(bool inner);
+extern void win_invalidate_scrollbar_cache(void);
 extern void win_set_scrollview(int pos, int len, int height);
 
 extern void win_adapt_term_size(bool sync_size_with_font, bool scale_font_with_size);
