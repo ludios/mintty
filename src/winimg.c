@@ -1208,10 +1208,13 @@ win_emoji_show(int x0, int y, wchar * efn, void * * bufpoi, int * buflen, int el
 
   HDC dc = win_get_paint_dc();
 
-  int coord_transformed = 0;
+  bool coord_transformed = false;
+  int coord_graphics_mode = 0;
   XFORM old_xform;
-  coord_transformed = italic && SetGraphicsMode(dc, GM_ADVANCED);
-  if (coord_transformed && GetWorldTransform(dc, &old_xform)) {
+  if (italic) {
+    coord_graphics_mode = SetGraphicsMode(dc, GM_ADVANCED);
+  }
+  if (coord_graphics_mode && GetWorldTransform(dc, &old_xform)) {
     //XFORM xform = (XFORM){1.0, 0.0, 1.1, 1.0, -1.1, 0.0};
     /* {eM11, eM12, eM21, eM22, eDx, eDy}
        y' = x * eM12 + y * eM22 + eDy
@@ -1225,6 +1228,10 @@ win_emoji_show(int x0, int y, wchar * efn, void * * bufpoi, int * buflen, int el
     xform.eDx = ((float)cell_width) * 
              (0.25 * ((float)(row - 1) / ((float)cell_height) + 1.0) - 0.125);
     coord_transformed = SetWorldTransform(dc, &xform);
+  }
+  if (coord_graphics_mode && !coord_transformed) {
+    SetGraphicsMode(dc, coord_graphics_mode);
+    coord_graphics_mode = 0;
   }
 
   GpGraphics * gr;
@@ -1241,8 +1248,10 @@ win_emoji_show(int x0, int y, wchar * efn, void * * bufpoi, int * buflen, int el
   s = GdipDisposeImage(img);
   gpcheck("dispose img", s);
 
-  if (coord_transformed)
+  if (coord_transformed) {
     SetWorldTransform(dc, &old_xform);
+    SetGraphicsMode(dc, coord_graphics_mode);
+  }
 
   win_release_paint_dc(dc);
 
