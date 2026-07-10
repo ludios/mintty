@@ -2541,7 +2541,6 @@ static int virtual_desktop_top;
 #include <w32api/gdiplus/gdiplusflat.h>
 
 static GpBrush * bgbrush_img = 0;
-static GpGraphics * bg_graphics = 0;
 
 #define dont_debug_gdiplus
 
@@ -2859,36 +2858,21 @@ load_background_image_brush(HDC dc, wstring fn)
 static bool
 fill_rect(HDC dc, RECT * boxp, GpBrush * br)
 {
-  GpStatus s, sbrush = -1;
-#ifdef debug_gdiplus
-  static int nfills = 0;
-  nfills ++;
-#endif
-
-  void fill(void)
-  {
-    sbrush = GdipFillRectangleI(bg_graphics, br, boxp->left, boxp->top, boxp->right - boxp->left, boxp->bottom - boxp->top);
-    gpcheck("fill", sbrush);
+  GpGraphics * graphics = 0;
+  GpStatus s = GdipCreateFromHDC(dc, &graphics);
+  gpcheck("create graphics", s);
+  if (s != Ok || !graphics) {
+    return false;
   }
 
-  if (bg_graphics) {
-    fill();
-  }
-  if (sbrush != Ok) {
-    if (bg_graphics) {
-      s = GdipDeleteGraphics(bg_graphics);
-      gpcheck("delete graphics", s);
-      bg_graphics = 0;
-    }
-#ifdef debug_gdiplus
-    printf("creating graphics, failure rate 1/%d\n", nfills);
-    nfills = 0;
-#endif
-    s = GdipCreateFromHDC(dc, &bg_graphics);
-    gpcheck("create graphics", s);
-    fill();
-  }
+  GpStatus sbrush = GdipFillRectangleI(
+    graphics, br, boxp->left, boxp->top,
+    boxp->right - boxp->left, boxp->bottom - boxp->top
+  );
+  gpcheck("fill", sbrush);
 
+  s = GdipDeleteGraphics(graphics);
+  gpcheck("delete graphics", s);
   return sbrush == Ok;
 }
 
@@ -2898,7 +2882,7 @@ void
 win_flush_background(bool clearbg)
 {
 #if defined(debug_gdiplus) && debug_gdiplus > 2
-  printf("flush background bmp %d img %d gr %d (tiled %d)\n", !!bgbrush_bmp, !!bgbrush_img, !!bg_graphics, tiled);
+  printf("flush background bmp %d img %d (tiled %d)\n", !!bgbrush_bmp, !!bgbrush_img, tiled);
 #endif
   w = 0; h = 0;
   tiled = false;
@@ -2913,12 +2897,6 @@ win_flush_background(bool clearbg)
   }
 #if CYGWIN_VERSION_API_MINOR >= 74
   drop_background_image_brush();
-  GpStatus s;
-  if (bg_graphics) {
-    s = GdipDeleteGraphics(bg_graphics);
-    bg_graphics = 0;
-    gpcheck("delete graphics", s);
-  }
 #endif
 }
 
