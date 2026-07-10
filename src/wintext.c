@@ -5486,9 +5486,10 @@ skip_drawing:;
         return !(ch >= 0x256D && ch <= 0x2573);
       return false;
     }
-    bool need_clip = true;
-    if (boxpower) {
-      need_clip = false;
+    // Double-height bottom halves draw from the preceding row's origin;
+    // clipping is therefore mandatory even for otherwise cell-safe glyphs.
+    bool need_clip = lattr >= LATTR_TOP;
+    if (boxpower && !need_clip) {
       for (int i = 0; i < len && !need_clip; i++) {
         need_clip = !boxpower_char_clip_safe(origtext[i]);
       }
