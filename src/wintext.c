@@ -4556,16 +4556,21 @@ win_text(int tx, int ty, wchar *text, int len, cattr attr, cattr *textattr, usho
 
  /* Coordinate transformation per line */
   long long perf_coord_line_t0 = mintty_perf_ticks();
-  int coord_transformed = 0;
+  bool coord_transformed = false;
+  int coord_graphics_mode = 0;
   XFORM old_xform;
   if (lpresrtl) {
-    coord_transformed = SetGraphicsMode(dc, GM_ADVANCED);
-    if (coord_transformed && GetWorldTransform(dc, &old_xform)) {
+    coord_graphics_mode = SetGraphicsMode(dc, GM_ADVANCED);
+    if (coord_graphics_mode && GetWorldTransform(dc, &old_xform)) {
       XFORM xform = (XFORM){-1.0, 0.0, 0.0, 1.0, term.cols * cell_width + 2 * PADDING, 0.0};
       coord_transformed = SetWorldTransform(dc, &xform);
       if (coord_transformed) {
         paint_dc_busy_push();  // popped at the coord_transformed restore
       }
+    }
+    if (coord_graphics_mode && !coord_transformed) {
+      SetGraphicsMode(dc, coord_graphics_mode);
+      coord_graphics_mode = 0;
     }
   }
   PERF_ADD_TICKS(win_text_coord_line_ticks, mintty_perf_ticks() - perf_coord_line_t0);
@@ -4777,12 +4782,13 @@ draw:;
 
  /* Coordinate transformation per character */
   long long perf_coord_char_t0 = mintty_perf_ticks();
-  int coord_transformed2 = 0;
+  bool coord_transformed2 = false;
+  int coord_graphics_mode2 = 0;
   XFORM old_xform2;
   RECT box_, box2_;
   if (wscale != 100) {
-    coord_transformed2 = SetGraphicsMode(dc, GM_ADVANCED);
-    if (coord_transformed2 && GetWorldTransform(dc, &old_xform2)) {
+    coord_graphics_mode2 = SetGraphicsMode(dc, GM_ADVANCED);
+    if (coord_graphics_mode2 && GetWorldTransform(dc, &old_xform2)) {
       clear_run();
 
       float scale = (float)wscale / 100.0;
@@ -4809,6 +4815,10 @@ draw:;
           box2.right *= scale;
         }
       }
+    }
+    if (coord_graphics_mode2 && !coord_transformed2) {
+      SetGraphicsMode(dc, coord_graphics_mode2);
+      coord_graphics_mode2 = 0;
     }
   }
   PERF_ADD_TICKS(win_text_coord_char_ticks, mintty_perf_ticks() - perf_coord_char_t0);
@@ -4955,6 +4965,7 @@ skip_drawing:;
   if (coord_transformed2) {
     SetWorldTransform(dc, &old_xform2);
     paint_dc_busy_pop();
+    SetGraphicsMode(dc, coord_graphics_mode2);
     // restore these in case we're in a shadow loop
     for (int i = 0; i < len; i++)
       dxs[i] = dxs_[i];
@@ -5882,6 +5893,7 @@ skip_drawing:;
   if (coord_transformed) {
     SetWorldTransform(dc, &old_xform);
     paint_dc_busy_pop();
+    SetGraphicsMode(dc, coord_graphics_mode);
   }
   PERF_ADD_TICKS(win_text_ticks, mintty_perf_ticks() - perf_win_text_start);
 }
