@@ -1415,6 +1415,20 @@ static int     paint_dirty_bot = -1;    // last character row painted (incl.)
 static int update_skipped = 0;
 int lines_scrolled = 0;
 
+static struct {
+  bool valid;
+  int max;
+  int page;
+  int pos;
+} scrollinfo_cache;
+
+/* Invalidate cached normal-scrollbar values before another writer uses SB_VERT. */
+void
+win_invalidate_scrollbar_cache(void)
+{
+  scrollinfo_cache.valid = false;
+}
+
 #define dont_debug_cursor 1
 
 static struct charnameentry {
@@ -2167,13 +2181,9 @@ do_update(void)
   perf_t0 = mintty_perf_ticks();
  /* Skip the call when nothing changed: SetScrollInfo redraws the
     scrollbar synchronously even when passed identical values, which
-    measures at more than a millisecond per display update. The cached
-    values are only trusted while this branch remains the sole writer
-    of SB_VERT: whenever the branch is not taken (scrollbar hidden or
-    taken over by an application scrollbar via DECSET 30 handling), the
-    cache is invalidated so the next update writes unconditionally. */
-  static bool scrollinfo_cached = false;
-  static int scrollinfo_max, scrollinfo_page, scrollinfo_pos;
+    measures at more than a millisecond per display update. Application
+    scrollbar writes explicitly invalidate this cache; the branch below
+    also invalidates it while the normal scrollbar is not in control. */
   if (cfg.scrollbar && term.show_scrollbar && !term.app_scrollbar) {
     int lines = sblines();
     SCROLLINFO si = {
@@ -2184,21 +2194,21 @@ do_update(void)
       .nPage = term.rows,
       .nPos = lines + term.disptop
     };
-    if (!scrollinfo_cached
-        || si.nMax != scrollinfo_max
-        || (int)si.nPage != scrollinfo_page
-        || si.nPos != scrollinfo_pos
+    if (!scrollinfo_cache.valid
+        || si.nMax != scrollinfo_cache.max
+        || (int)si.nPage != scrollinfo_cache.page
+        || si.nPos != scrollinfo_cache.pos
        )
     {
       SetScrollInfo(wnd, SB_VERT, &si, true);
-      scrollinfo_cached = true;
-      scrollinfo_max  = si.nMax;
-      scrollinfo_page = (int)si.nPage;
-      scrollinfo_pos  = si.nPos;
+      scrollinfo_cache.valid = true;
+      scrollinfo_cache.max   = si.nMax;
+      scrollinfo_cache.page  = (int)si.nPage;
+      scrollinfo_cache.pos   = si.nPos;
     }
   }
   else {
-    scrollinfo_cached = false;
+    win_invalidate_scrollbar_cache();
   }
   PERF_ADD_TICKS(scrollbar_ticks, mintty_perf_ticks() - perf_t0);
 

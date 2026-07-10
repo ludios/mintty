@@ -1331,6 +1331,7 @@ win_set_scrollview(int pos, int len, int height)
 {
   bool prev = term.app_scrollbar;
   term.app_scrollbar = pos;
+  win_invalidate_scrollbar_cache();
 
   if (term.app_scrollbar != prev)
     win_update_scrollbar(false);
