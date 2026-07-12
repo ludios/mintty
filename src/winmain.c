@@ -264,10 +264,14 @@ getregstr(HKEY key, wstring subkey, wstring attribute)
   DWORD type;
   DWORD len;
   int res = RegQueryValueExW(sk, attribute, 0, &type, 0, &len);
-  if (res)
+  if (res) {
+    RegCloseKey(sk);
     return 0;
-  if (!(type == REG_SZ || type == REG_EXPAND_SZ || type == REG_MULTI_SZ))
+  }
+  if (!(type == REG_SZ || type == REG_EXPAND_SZ || type == REG_MULTI_SZ)) {
+    RegCloseKey(sk);
     return 0;
+  }
   wchar * val = malloc (len);
   res = RegQueryValueExW(sk, attribute, 0, &type, (void *)val, &len);
   RegCloseKey(sk);
@@ -296,8 +300,10 @@ getregval(HKEY key, wstring subkey, wstring attribute, uint def)
   DWORD type;
   DWORD len;
   int res = RegQueryValueExW(sk, attribute, 0, &type, 0, &len);
-  if (res)
+  if (res) {
+    RegCloseKey(sk);
     return def;
+  }
   if (type == REG_DWORD) {
     DWORD val;
     len = sizeof(DWORD);
@@ -306,6 +312,8 @@ getregval(HKEY key, wstring subkey, wstring attribute, uint def)
     if (!res)
       return (uint)val;
   }
+  else
+    RegCloseKey(sk);
   return def;
 #endif
 }
@@ -374,9 +382,9 @@ cmd_out_capture_start_process(char * cmd)
 
   // Read output
   static char buffer[MAX_PATH + 1];
-  DWORD bytesRead;
+  DWORD bytesRead = 0;
   // we need only one line of output
-  ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL);
+  bool read_ok = ReadFile(readPipe, buffer, sizeof(buffer) - 1, &bytesRead, NULL);
 
   CloseHandle(readPipe);
 
@@ -384,7 +392,7 @@ cmd_out_capture_start_process(char * cmd)
   CloseHandle(pi.hProcess);
   CloseHandle(pi.hThread);
 
-  if (bytesRead > 0) {
+  if (read_ok && bytesRead > 0) {
     buffer[bytesRead] = 0;
     return buffer;
   }
@@ -624,7 +632,7 @@ guardpath(string path, int level)
         if (d) {
           char * tty = child_tty();
           struct dirent * e;
-          while (guard && (e = readdir(d))) {
+          while (tty && guard && (e = readdir(d))) {
             char * pn = e->d_name;
             int thispid = atoi(pn);
             if (thispid) {
@@ -3154,16 +3162,20 @@ win_beep(uint tone, float vol, float freq, uint ms)
   } params = {tone, ms, vol, freq};
 
 static int beep_pid = -1;
-static int fd[2];
+static int fd[2] = {-1, -1};
   if (beep_pid <= 0) {
-    pipe(fd);
+    if (pipe(fd) < 0)
+      return;
     beep_pid = fork();
     if (beep_pid == -1) {
-      // error
+      close(fd[0]);
+      close(fd[1]);
+      fd[0] = fd[1] = -1;
       return;
     }
     else if (beep_pid > 0) { // parent
       close(fd[0]);
+      fd[0] = -1;
     }
     else { // child
       close(fd[1]);
@@ -7348,8 +7360,13 @@ main(int argc, char *argv[])
       }
       when '': {
         int tfd = open(optarg, O_WRONLY | O_CREAT | O_APPEND | O_NOCTTY, 0600);
-        close(1);
-        dup(tfd);
+        if (tfd < 0)
+          option_error(__("Could not open trace file '%s'"), optarg, errno);
+        if (dup2(tfd, 1) < 0) {
+          int err = errno;
+          close(tfd);
+          option_error(__("Could not redirect trace output to '%s'"), optarg, err);
+        }
         close(tfd);
       }
       when 'P':
@@ -7651,23 +7668,38 @@ static int dynfonts = 0;
     {
 # ifdef copyfile_posix
       int f = open(fn, O_BINARY | O_RDONLY);
-      if (!f)
+      if (f < 0)
         return false;
       int t = open(tn, O_CREAT | O_WRONLY | O_BINARY |
                    (overwrite ? O_TRUNC : O_EXCL), 0755);
-      if (!t) {
+      if (t < 0) {
         close(f);
         return false;
       }
 
       char buf[1024];
-      int len;
+      ssize_t len;
       bool res = true;
-      while ((len = read(t, buf, sizeof buf)) > 0)
-        if (write(t, buf, len) < 0) {
-          res = false;
-          break;
+      while ((len = read(f, buf, sizeof buf)) > 0) {
+        char * p = buf;
+        while (len > 0) {
+          ssize_t written = write(t, p, len);
+          if (written > 0) {
+            p += written;
+            len -= written;
+          }
+          else if (written < 0 && errno == EINTR)
+            continue;
+          else {
+            res = false;
+            break;
+          }
         }
+        if (!res)
+          break;
+      }
+      if (len < 0)
+        res = false;
       close(f);
       close(t);
       return res;
