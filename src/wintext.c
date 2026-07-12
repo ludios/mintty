@@ -4686,10 +4686,11 @@ draw:;
       //printf("  %04d:%04d%s", uloff - offset + wave, i * step, i % 3 ? "" : "\n");
     }
 
-    HRGN ur = 0;
-    GetClipRgn(dc, ur);
-    paint_dc_busy_push();  // popped after the curly clip is cleared below
-    IntersectClipRect(dc, box.left, box.top, box.right, box.bottom);
+    int saved_dc = SaveDC(dc);
+    if (saved_dc) {
+      paint_dc_busy_push();  // popped after the curly clip is restored below
+      IntersectClipRect(dc, box.left, box.top, box.right, box.bottom);
+    }
 
     HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, ul));
     for (int l = 0; l < line_width; l++) {
@@ -4701,8 +4702,11 @@ draw:;
     oldpen = SelectObject(dc, oldpen);
     DeleteObject(oldpen);
 
-    SelectClipRgn(dc, ur);
-    paint_dc_busy_pop();
+    if (saved_dc) {
+      BOOL restored = RestoreDC(dc, saved_dc);
+      assert(restored);
+      paint_dc_busy_pop();
+    }
   }
   else
 
@@ -5002,18 +5006,21 @@ skip_drawing:;
 #define DRAW_DOWN  0x4
 #endif
 
+  int selfdraw_saved_dc = 0;
   void setclipr(int x, int y, int n)
   {
     long long perf_clip_t0 = mintty_perf_ticks();
+    assert(!selfdraw_saved_dc);
     int clip_height = cell_height 
                       * (lattr >= LATTR_TOP && ty < term_allrows - 1 ? 2 : 1);
     HRGN clipr = selfdraw_get_clip_rgn(x, y, x + n * char_width, y + clip_height);
     PERF_COUNT(win_text_clip_set_calls, 1);
-    // push unconditionally, symmetric with clearclipr's pop; if region
-    // creation failed, fills merely fall back to GDI while "busy"
-    paint_dc_busy_push();
-    if (clipr) {
-      SelectClipRgn(dc, clipr);
+    selfdraw_saved_dc = SaveDC(dc);
+    if (selfdraw_saved_dc) {
+      paint_dc_busy_push();
+    }
+    if (selfdraw_saved_dc && clipr) {
+      ExtSelectClipRgn(dc, clipr, RGN_AND);
       PERF_COUNT(win_text_gdi_select_clip_calls, 1);
     }
     PERF_ADD_TICKS(win_text_clip_ticks, mintty_perf_ticks() - perf_clip_t0);
@@ -5021,9 +5028,12 @@ skip_drawing:;
   void clearclipr()
   {
     long long perf_clip_t0 = mintty_perf_ticks();
-    SelectClipRgn(dc, 0);
-    paint_dc_busy_pop();
-    PERF_COUNT(win_text_gdi_select_clip_calls, 1);
+    if (selfdraw_saved_dc) {
+      BOOL restored = RestoreDC(dc, selfdraw_saved_dc);
+      assert(restored);
+      selfdraw_saved_dc = 0;
+      paint_dc_busy_pop();
+    }
     PERF_COUNT(win_text_clip_clear_calls, 1);
     PERF_ADD_TICKS(win_text_clip_ticks, mintty_perf_ticks() - perf_clip_t0);
   }
