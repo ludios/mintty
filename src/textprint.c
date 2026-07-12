@@ -12,6 +12,24 @@ static const wchar BOM = 0xFEFF;
 static uint np = 0;
 static struct passwd * pw;
 
+static bool
+write_all(int fd, const void * data, size_t len)
+{
+  const char * buf = data;
+  while (len) {
+    ssize_t n = write(fd, buf, len);
+    if (n > 0) {
+      buf += n;
+      len -= n;
+    }
+    else if (n < 0 && errno == EINTR)
+      continue;
+    else
+      return false;
+  }
+  return true;
+}
+
 void
 printer_start_job(wstring printer_name)
 {
@@ -32,34 +50,37 @@ printer_start_job(wstring printer_name)
   sprintf(pid, "%d", getpid());
 
   char n[11];
-  sprintf(n, "%d", ++np);
+  sprintf(n, "%u", ++np);
 
   // compose $tempdir/mintty.print.$USER.$$
   char * pref = "mintty-print.";
-  pf = malloc(strlen(tempdir) + strlen(pref) + strlen(user) + strlen(pid) + strlen(n) + 7);
-  sprintf(pf, "%s/%s%s.%s-%s.prn", tempdir, pref, user, pid, n);
+  pf = asform("%s/%s%s.%s-%s.prn", tempdir, pref, user, pid, n);
 
   pd = open(pf, O_CREAT | O_TRUNC | O_BINARY | O_WRONLY, 0600);
   if (pd >= 0) {
     win_prefix_title(_W("[Printing...] "));
 
     printer = printer_name;
-    write(pd, &BOM, 2);
+    if (!write_all(pd, &BOM, sizeof BOM)) {
+      close(pd);
+      pd = -1;
+      printer = 0;
+      free(pf);
+      pf = 0;
+      win_unprefix_title(_W("[Printing...] "));
+    }
+  }
+  else {
+    free(pf);
+    pf = 0;
   }
 }
 
 void
 printer_wwrite(wchar * wdata, uint len)
 {
-  if (printer) {
-    void * wbuf = wdata;
-    uint wlen = len * sizeof(wchar);
-    uint n;
-    while ((n = write(pd, wbuf, wlen)) > 0) {
-      wbuf += n;
-      wlen -= n;
-    }
-  }
+  if (printer)
+    write_all(pd, wdata, len * sizeof(wchar));
 }
 
 void
@@ -75,7 +96,7 @@ printer_write(char * data, uint len)
     }
     buf[len] = '\0';
     wchar * wdata = cs__mbstowcs(buf);
-    write(pd, wdata, wcslen(wdata) * sizeof(wchar));
+    write_all(pd, wdata, wcslen(wdata) * sizeof(wchar));
     free(buf);
     free(wdata);
   }
@@ -105,23 +126,32 @@ printer_finish_job(void)
     // which is not necessarily the same as GetOEMCP() !
     FILE * chcpcom = popen("$SYSTEMROOT/System32/chcp.com | /bin/sed -e 's,.*:,,' -e 's, ,,'", "r");
     char line[99];
-    fgets(line, sizeof line, chcpcom);
-    pclose(chcpcom);
-    int chcp = atoi(line);
+    int chcp = GetOEMCP();
+    if (chcpcom) {
+      if (fgets(line, sizeof line, chcpcom)) {
+        int parsed_chcp = atoi(line);
+        if (parsed_chcp > 0)
+          chcp = parsed_chcp;
+      }
+      pclose(chcpcom);
+    }
 
     char * cmdformat = "@%%SYSTEMROOT%%\\System32\\chcp 65001 > nul:\r\n@start /min %%SYSTEMROOT%%\\notepad /w /pt \"%s\" \"%s\"\r\n@%%SYSTEMROOT%%\\System32\\chcp %d > nul:";
     char cmd[strlen(cmdformat) - 6 + strlen(wf) + strlen(pn) + 22 + 1];
     sprintf(cmd, cmdformat, wf, pn, chcp);
 
-    write(cmdfile, cmd, strlen(cmd));
-    close(cmdfile);
+    bool cmd_ready = cmdfile >= 0 && write_all(cmdfile, cmd, strlen(cmd));
+    if (cmdfile >= 0)
+      close(cmdfile);
 
     //printf("system (%s)\n", pf);
-    system(pf);
+    if (cmd_ready)
+      system(pf);
 
     free(wf);
     free(pn);
     free(pf);
+    pf = 0;
     printer = 0;
 
     win_unprefix_title(_W("[Printing...] "));
