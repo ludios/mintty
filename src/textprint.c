@@ -33,6 +33,9 @@ write_all(int fd, const void * data, size_t len)
 void
 printer_start_job(wstring printer_name)
 {
+  if (!printer_name || !*printer_name)
+    return;
+
   char * tempdir = tmpdir();
 
   char * user = getenv("USER");
