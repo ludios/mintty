@@ -14,9 +14,6 @@
 #   2. start that binary, e.g.:
 #        ./bin/cygwin64/mintty.exe -o Ligatures=0 -o DisplaySpeedup=0 &
 #      and inside it run:  ./tools/paint-stress-test
-#   3. run it once more in a bloom-enabled instance:
-#        ./bin/cygwin64/mintty.exe -o Bloom=2 &
-#      (Bloom is a config option, not togglable by escape sequence.)
 #
 # Success: the script runs to the final banner and the terminal survives.
 # Failure: an unbalanced transform/clip pair trips the assert; Cygwin
@@ -196,7 +193,6 @@ main() {
 	sleep 0.3
 	printf '\n%b== ALL SECTIONS EMITTED - if you can read this, no assert fired ==%b\n' \
 	       "$e[1;32m" "$e[0m"
-	printf 'Repeat once in an instance started with -o Bloom=2 for the bloom pair.\n'
 }
 
 main "$@"
