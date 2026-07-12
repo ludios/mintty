@@ -7363,12 +7363,14 @@ main(int argc, char *argv[])
         int tfd = open(optarg, O_WRONLY | O_CREAT | O_APPEND | O_NOCTTY, 0600);
         if (tfd < 0)
           option_error(__("Could not open trace file '%s'"), optarg, errno);
-        if (dup2(tfd, 1) < 0) {
-          int err = errno;
+        if (tfd != 1) {
+          if (dup2(tfd, 1) < 0) {
+            int err = errno;
+            close(tfd);
+            option_error(__("Could not redirect trace output to '%s'"), optarg, err);
+          }
           close(tfd);
-          option_error(__("Could not redirect trace output to '%s'"), optarg, err);
         }
-        close(tfd);
       }
       when 'P':
         set_arg_option("ConPTY", optarg);
