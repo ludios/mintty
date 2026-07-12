@@ -370,8 +370,9 @@ show_font_warnings(void)
 static GLYPHSET *
 win_font_ranges(HDC dc, struct fontfam * ff, int fontno)
 {
-  if (!ff->fonts[fontno] || fontno >= FONT_BOLDITAL)
+  if (fontno < FONT_NORMAL || fontno > FONT_BOLDITAL || !ff->fonts[fontno]) {
     return 0;
+  }
   SelectObject(dc, ff->fonts[fontno]);
   int ursize = GetFontUnicodeRanges(dc, 0);
   GLYPHSET * gs = malloc(ursize);
