@@ -687,7 +687,12 @@ static bool previously_selected = false;
   while (tempfile_num > TEMPFILE_MAX_NUM && term.imgs.first) {
     img = term.imgs.first;
     term.imgs.first = term.imgs.first->next;
-    term.imgs.first->prev = NULL;
+    if (term.imgs.first) {
+      term.imgs.first->prev = NULL;
+    }
+    else {
+      term.imgs.last = NULL;
+    }
     winimg_destroy(img);
   }
 
