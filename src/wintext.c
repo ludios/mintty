@@ -6797,15 +6797,15 @@ win_set_colour(colour_i i, colour c)
           uint r = (uint)red(_cc) * (uint)red(cfg.ime_cursor_colour);
           if (red(cfg.cursor_colour))
             r /= red(cfg.cursor_colour);
-          r = max(r, 255);
+          r = min(r, 255);
           uint g = (uint)green(_cc) * (uint)green(cfg.ime_cursor_colour);
           if (green(cfg.cursor_colour))
             g /= green(cfg.cursor_colour);
-          g = max(r, 255);
+          g = min(g, 255);
           uint b = (uint)blue(_cc) * (uint)blue(cfg.ime_cursor_colour);
           if (blue(cfg.cursor_colour))
             b /= blue(cfg.cursor_colour);
-          b = max(r, 255);
+          b = min(b, 255);
           c = RGB(r, g, b);
         }
         cc(IME_CURSOR_COLOUR_I, c);
