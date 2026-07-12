@@ -815,6 +815,7 @@ child_proc(void)
         // this avoids most partial updates, results in less flickering/tearing.
         static char buf[4096];
         uint len = 0;
+        bool pty_closed = false;
 #if CYGWIN_VERSION_API_MINOR >= 74
         if (term.baud > 0) {
           uint cps = term.baud / 10; // 1 start bit, 8 data bits, 1 stop bit
@@ -852,12 +853,14 @@ child_proc(void)
           int ret = read(pty_fd, buf, 1);
           if (ret > 0)
             len = ret;
+          else if (!ret || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR))
+            pty_closed = true;
         }
         else
 #endif
-#if defined(collect_pty_buffer) || CYGWIN_VERSION_DLL_MAJOR < 1005
+        // always a loop, even if single-pass, so that `break` below skips
+        // only the read block and pty closure is still detected after it
         do
-#endif
         {
           int ret = read(pty_fd, buf + len, sizeof buf - len);
           //printf("%d+%d ", len, ret);
@@ -866,8 +869,11 @@ child_proc(void)
 
           if (ret > 0)
             len += ret;
-          else
+          else {
+            if (!ret || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR))
+              pty_closed = true;
             break;
+          }
 
           // The read loop buffer filling was once introduced to speed up
           // but its implied usage of pty interferes with the WSL gateway
@@ -881,6 +887,8 @@ child_proc(void)
         }
 #if defined(collect_pty_buffer) || CYGWIN_VERSION_DLL_MAJOR < 1005
           while (len < sizeof buf);
+#else
+          while (0);
 #endif
         //printf("read %d\n", len);
 
@@ -897,7 +905,7 @@ child_proc(void)
           }
           term_log(buf, len);
         }
-        else {
+        else if (pty_closed) {
           pty_fd = -1;
           term_hide_cursor();
         }
