@@ -3949,6 +3949,7 @@ win_reconfig(void)
     new_cfg.font.isbold != cfg.font.isbold ||
     new_cfg.bold_as_font != cfg.bold_as_font ||
     new_cfg.bold_as_colour != cfg.bold_as_colour ||
+    new_cfg.font_render != cfg.font_render ||
     new_cfg.font_smoothing != cfg.font_smoothing;
 
   bool emojistyle_changed = new_cfg.emojis != cfg.emojis;
