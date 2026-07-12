@@ -3,6 +3,7 @@
 #include "winpriv.h"  // win_prefix_title, win_unprefix_title
 #include <fcntl.h>
 #include <pwd.h>
+#include <winnls.h>  // GetOEMCP
 
 
 static wstring printer = 0;
