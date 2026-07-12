@@ -41,19 +41,22 @@ printer_start_enum(void)
   }
   return ok ? num : 0;
 #else
-  HKEY dev;
+  HKEY dev = 0;
   // open registry key to retrieve printers list; the ...\Devices key 
   // may contain some bogus entries in addition to the \PrinterPorts key,
   // so we use the more reliable list
 #define PKEY "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\PrinterPorts"
-  RegOpenKeyW(HKEY_CURRENT_USER, W(PKEY), &dev);
+  if (RegOpenKeyW(HKEY_CURRENT_USER, W(PKEY), &dev) != ERROR_SUCCESS)
+    return 0;
   DWORD num_subkeys, maxsubkeylen, maxclasslen, maxvaluelen;  // dummy
   DWORD num_values = 0, maxvalnamelen = 0;
   int res =
     RegQueryInfoKeyW(dev, 0, 0, 0, &num_subkeys, &maxsubkeylen, &maxclasslen,
                      &num_values, &maxvalnamelen, &maxvaluelen, 0, 0);
-  if (res)
+  if (res) {
+    RegCloseKey(dev);
     return 0;
+  }
   num = num_values;
   printer_info = newn(struct printer_info, num);
   wchar valname[maxvalnamelen + 1];
@@ -95,19 +98,29 @@ printer_get_default(void)
     return W("");
 #else
   HKEY win = 0;
-  RegOpenKeyW(HKEY_CURRENT_USER, W("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows"), &win);
+  if (RegOpenKeyW(HKEY_CURRENT_USER,
+                  W("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows"),
+                  &win) != ERROR_SUCCESS)
+    return W("");
   DWORD len;
   int res = RegQueryValueExW(win, W("Device"), 0, 0, 0, &len);
-  if (res)
-    return 0;
+  if (res) {
+    RegCloseKey(win);
+    return W("");
+  }
   static wchar * def = 0;
   if (def)
     free(def);
-  len ++;
-  def = newn(wchar, len);
+  DWORD byte_len = len;
+  def = newn(wchar, byte_len / sizeof(wchar) + 1);
   res = RegQueryValueExW(win, W("Device"), 0, 0, (void *)def, &len);
-  if (res)
-    return 0;
+  RegCloseKey(win);
+  if (res) {
+    free(def);
+    def = 0;
+    return W("");
+  }
+  def[byte_len / sizeof(wchar)] = 0;
   wchar * comma = wcschr(def, ',');
   if (comma)
     *comma = 0;
