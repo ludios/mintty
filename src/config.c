@@ -1324,7 +1324,7 @@ get_resource_file(wstring sub, wstring res, bool towrite)
     if (towrite && fd < 0 && errno == ENOENT) {
       // try to create resource subdirectories
       int dd = open(config_dirs[i], O_RDONLY | O_DIRECTORY);
-      if (dd) {
+      if (dd >= 0) {
         mkdirat(dd, "themes", 0755);
         mkdirat(dd, "sounds", 0755);
         mkdirat(dd, "lang", 0755);
@@ -2111,16 +2111,20 @@ getmuicache()
     return 0;
 
   char sk[256];
-  if (RegEnumKeyA(hk, 0, sk, 256) != ERROR_SUCCESS)
+  if (RegEnumKeyA(hk, 0, sk, 256) != ERROR_SUCCESS) {
+    RegCloseKey(hk);
     return 0;
+  }
 
   HKEY hk1 = regopen(hk, sk);
   RegCloseKey(hk);
   if (!hk1)
     return 0;
 
-  if (RegEnumKeyA(hk1, 0, sk, 256) != ERROR_SUCCESS)
+  if (RegEnumKeyA(hk1, 0, sk, 256) != ERROR_SUCCESS) {
+    RegCloseKey(hk1);
     return 0;
+  }
 
   hk = regopen(hk1, sk);
   RegCloseKey(hk1);
