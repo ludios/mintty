@@ -4167,6 +4167,7 @@ term_paint(void)
     char has_sea = 0;  // South East Asian script
     uchar bc = 0;
     bool prev_unshaped_ascii = false;
+    xchar prev_xtchar = 0;
     bool dirty_run = (line->lattr != displine->lattr);
     bool dirty_line = dirty_run;
     bool perf_line_dirty = dirty_line;
@@ -4521,6 +4522,14 @@ term_paint(void)
         PERF_COUNT(bidi_class_calls, 1);
         tbc = bidi_class(xtchar);
       }
+      if (prev_unshaped_ascii && is_comcom(tchar)) {
+        /* bc may be frozen at the head of a merged ASCII sequence (above),
+           which is fine for the boundary break, but composed combining
+           characters are exempt from that break, so their bidi-class break
+           decision needs the true class of the immediate predecessor. */
+        PERF_COUNT(bidi_class_calls, 1);
+        bc = bidi_class(prev_xtchar);
+      }
 
      /* Bidi class changes serve no purpose between two printable ASCII
       * characters that the effective font renders without shaping, so skip
@@ -4558,6 +4567,7 @@ term_paint(void)
       }
       bc = tbc;
       prev_unshaped_ascii = tunshaped_ascii;
+      prev_xtchar = xtchar;
 
      /* Flush previous output chunk on break_run */
       if (break_run) {
