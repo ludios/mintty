@@ -980,9 +980,11 @@ procres(int pid, char * res)
   free(fn);
   if (fd < 0)
     return 0;
-  int n = read(fd, fbuf, sizeof fbuf - 1);
+  ssize_t n = read(fd, fbuf, sizeof fbuf - 1);
   close(fd);
-  for (int i = 0; i < n - 1; i++)
+  if (n < 0)
+    return 0;
+  for (ssize_t i = 0; i < n - 1; i++)
     if (!fbuf[i])
       fbuf[i] = ' ';
   fbuf[n] = 0;
@@ -996,7 +998,7 @@ static int
 procresi(int pid, char * res)
 {
   char * si = procres(pid, res);
-  int i = atoi(si);
+  int i = si ? atoi(si) : 0;
   free(si);
   return i;
 }
@@ -1018,6 +1020,10 @@ grandchild_process_list(void)
   if (!d)
     return 0;
   char * tty = child_tty();
+  if (!tty) {
+    closedir(d);
+    return 0;
+  }
   struct dirent * e;
   while ((e = readdir(d))) {
     char * pn = e->d_name;
@@ -1034,9 +1040,10 @@ grandchild_process_list(void)
           ttyprocs[nttyprocs].ppid = ppid;
           ttyprocs[nttyprocs].winpid = winpid;
           char * cmd = procres(thispid, "cmdline");
-          ttyprocs[nttyprocs].cmdline = cmd;
-
-          nttyprocs++;
+          if (cmd) {
+            ttyprocs[nttyprocs].cmdline = cmd;
+            nttyprocs++;
+          }
         }
         free(ctty);
       }
@@ -1255,8 +1262,10 @@ foreground_prog()
     FILE * enf = fopen(exename, "r");
     if (enf) {
       char exepath[MAX_PATH + 1];
-      fgets(exepath, sizeof exepath, enf);
+      char * got = fgets(exepath, sizeof exepath, enf);
       fclose(enf);
+      if (!got)
+        return 0;
       // get basename of program path
       char * exebase = strrchr(exepath, '/');
       if (exebase)
