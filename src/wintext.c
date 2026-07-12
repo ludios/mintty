@@ -6372,7 +6372,7 @@ win_char_width_uncached(xchar c, cattrflags attr)
     HDC wid_dc = CreateCompatibleDC(dc);
     HBITMAP wid_bm = CreateCompatibleBitmap(dc, cell_width * 2, cell_height);
     HBITMAP wid_oldbm = SelectObject(wid_dc, wid_bm);
-    SelectObject(wid_dc, ff->fonts[FONT_NORMAL]);
+    SelectObject(wid_dc, f);
     SetTextAlign(wid_dc, TA_TOP | TA_LEFT | TA_NOUPDATECP);
     SetTextColor(wid_dc, RGB(255, 255, 255));
     SetBkColor(wid_dc, RGB(0, 0, 0));
