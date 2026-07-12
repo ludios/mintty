@@ -5484,7 +5484,9 @@ skip_drawing:;
     }
     // Double-height bottom halves draw from the preceding row's origin;
     // clipping is therefore mandatory even for otherwise cell-safe glyphs.
-    bool need_clip = lattr >= LATTR_TOP;
+    // DEC Technical diagonals end on cell borders with round-capped pens
+    // (no PS_ENDCAP_SQUARE), whose caps rasterize outside the cell.
+    bool need_clip = dectcs || lattr >= LATTR_TOP;
     if (boxpower && !need_clip) {
       for (int i = 0; i < len && !need_clip; i++) {
         need_clip = !boxpower_char_clip_safe(origtext[i]);
