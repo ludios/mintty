@@ -6154,31 +6154,39 @@ dw_has_glyph(xchar xc, cattrflags attr)
       goto cleanup;
   }
 
-  // cache font objects used for detection
-  // the flag in the fontfamilies struct indicates the need to refresh
-  static IDWriteFont * font[11] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  // Cache font objects used for detection by family and requested style.
+  // The flag in the fontfamilies struct indicates the need to refresh.
+  static IDWriteFont * font[11][FONT_BOLDITAL + 1] = {{0}};
+  bool bold   = (ff->bold_mode == BOLD_FONT) && (attr & ATTR_BOLD);
+  bool italic = attr & ATTR_ITALIC;
+  int font4index = (bold ? FONT_BOLD : 0) | (italic ? FONT_ITALIC : 0);
   if (!ff->cached) {
-    // drop previous font object
-    if (font[findex]) {
-      IDWriteFont_Release(font[findex]);
-      font[findex] = 0;
+    // Drop all previous style objects for this family.
+    for (int i = 0; i <= FONT_BOLDITAL; i++) {
+      if (font[findex][i]) {
+        IDWriteFont_Release(font[findex][i]);
+        font[findex][i] = 0;
+      }
     }
-
-    int w = (attr & ATTR_BOLD) ? ff->fw_bold : ff->fw_norm;
-    int i = attr & ATTR_ITALIC;
-    LOGFONTW lf = {font_height, 0, 0, 0, w, i, false, false,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        get_font_quality(), FIXED_PITCH | FF_DONTCARE,
-        W("")};
-    wcsncpy(lf.lfFaceName, ff->name, LF_FACESIZE);
-    hr = IDWriteGdiInterop_CreateFontFromLOGFONT(interop, &lf, &font[findex]);
-    if (FAILED(hr))
-      goto cleanup;
     ff->cached = true;
-    //printf("CreateFontFromLOGFONT [%d] (%ls)\n", findex, ff->name);
+  }
+
+  if (!font[findex][font4index]) {
+    HFONT selected_font = font4(ff, attr);
+    LOGFONTW lf;
+    if (!selected_font || GetObjectW(selected_font, sizeof lf, &lf) != sizeof lf) {
+      goto cleanup;
+    }
+    hr = IDWriteGdiInterop_CreateFontFromLOGFONT(
+           interop, &lf, &font[findex][font4index]
+         );
+    if (FAILED(hr)) {
+      goto cleanup;
+    }
+    //printf("CreateFontFromLOGFONT [%d:%d] (%ls)\n", findex, font4index, lf.lfFaceName);
   }
   BOOL ex;
-  hr = IDWriteFont_HasCharacter(font[findex], xc, &ex);
+  hr = IDWriteFont_HasCharacter(font[findex][font4index], xc, &ex);
   //printf("HasCharacter (ok %d): %d\n", SUCCEEDED(hr), ex);
   if (FAILED(hr))
     ok = true;  // could not detect -> do not trigger fallback
