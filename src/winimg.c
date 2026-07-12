@@ -1134,7 +1134,7 @@ win_emoji_show(int x0, int y, wchar * efn, void * * bufpoi, int * buflen, int el
       char * fn = path_win_w_to_posix(efn);
       int f = open(fn, O_BINARY | O_RDONLY);
       free(fn);
-      if (f) {
+      if (f >= 0) {
         struct stat stat;
         if (0 == fstat(f, &stat)) {
           char * img = newn(char, stat.st_size);
@@ -1166,6 +1166,12 @@ win_emoji_show(int x0, int y, wchar * efn, void * * bufpoi, int * buflen, int el
     s = GdipLoadImageFromFile(efn, &img);
     gpcheck("load file", s);
   }
+  if (s != Ok || !img) {
+    if (fs) {
+      fs->lpVtbl->Release(fs);
+    }
+    return;
+  }
 
   int col = PADDING + x0 * cell_width - horclip();
   int row = OFFSET + PADDING + y * cell_height;
@@ -1183,31 +1189,34 @@ win_emoji_show(int x0, int y, wchar * efn, void * * bufpoi, int * buflen, int el
   // glitch: missing clipping for inconsistent double-height lines
 
   if (cfg.emoji_placement) {
-    uint iw, ih;
-    s = GdipGetImageWidth(img, &iw);
-    gpcheck("width", s);
-    s = GdipGetImageHeight(img, &ih);
-    gpcheck("height", s);
-    // consider aspect ratio so that ih/iw == h/w;
-    // if EMPL_FULL, always adjust w
-    // if ih/iw > h/w, make w smaller
-    // if iw/ih > w/h, make h smaller
-    if (cfg.emoji_placement == EMPL_FULL && ih * w != h * iw) {
-      w = h * iw / ih;
-    }
-    else if (ih * w > h * iw) {
-      int w0 = w;
-      w = h * iw / ih;
-      if (cfg.emoji_placement == EMPL_MIDDLE) {
-        // horizontally center
-        col += (w0 - w) / 2;
+    uint iw = 0;
+    uint ih = 0;
+    GpStatus width_status  = GdipGetImageWidth(img, &iw);
+    GpStatus height_status = GdipGetImageHeight(img, &ih);
+    gpcheck("width", width_status);
+    gpcheck("height", height_status);
+    if (width_status == Ok && height_status == Ok && iw && ih) {
+      // consider aspect ratio so that ih/iw == h/w;
+      // if EMPL_FULL, always adjust w
+      // if ih/iw > h/w, make w smaller
+      // if iw/ih > w/h, make h smaller
+      if (cfg.emoji_placement == EMPL_FULL && ih * w != h * iw) {
+        w = h * iw / ih;
       }
-    }
-    else if (iw * h > w * ih) {
-      int h0 = h;
-      h = w * ih / iw;
-      // vertically center
-      row += (h0 - h) / 2;
+      else if (ih * w > h * iw) {
+        int w0 = w;
+        w = h * iw / ih;
+        if (cfg.emoji_placement == EMPL_MIDDLE) {
+          // horizontally center
+          col += (w0 - w) / 2;
+        }
+      }
+      else if (iw * h > w * ih) {
+        int h0 = h;
+        h = w * ih / iw;
+        // vertically center
+        row += (h0 - h) / 2;
+      }
     }
   }
 
@@ -1239,17 +1248,19 @@ win_emoji_show(int x0, int y, wchar * efn, void * * bufpoi, int * buflen, int el
     coord_graphics_mode = 0;
   }
 
-  GpGraphics * gr;
+  GpGraphics * gr = 0;
   s = GdipCreateFromHDC(dc, &gr);
   gpcheck("hdc", s);
-
-  s = GdipDrawImageRectI(gr, img, col, row, w, h);
-  gpcheck("draw", s);
-  s = GdipFlush(gr, FlushIntentionFlush);
-  gpcheck("flush", s);
-
-  s = GdipDeleteGraphics(gr);
-  gpcheck("delete gr", s);
+  if (s == Ok && gr) {
+    s = GdipDrawImageRectI(gr, img, col, row, w, h);
+    gpcheck("draw", s);
+    s = GdipFlush(gr, FlushIntentionFlush);
+    gpcheck("flush", s);
+  }
+  if (gr) {
+    s = GdipDeleteGraphics(gr);
+    gpcheck("delete gr", s);
+  }
   s = GdipDisposeImage(img);
   gpcheck("dispose img", s);
 
