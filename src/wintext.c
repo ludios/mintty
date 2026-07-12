@@ -4709,6 +4709,7 @@ draw:;
     if (saved_dc) {
       BOOL restored = RestoreDC(dc, saved_dc);
       assert(restored);
+      (void)restored;  // NDEBUG
       paint_dc_busy_pop();
     }
   }
@@ -5035,6 +5036,7 @@ skip_drawing:;
     if (selfdraw_saved_dc) {
       BOOL restored = RestoreDC(dc, selfdraw_saved_dc);
       assert(restored);
+      (void)restored;  // NDEBUG
       selfdraw_saved_dc = 0;
       paint_dc_busy_pop();
     }
