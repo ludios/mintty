@@ -1109,11 +1109,13 @@ win_mouse_release(mouse_button b, LPARAM lp)
 
   if (b == skip_release_token) {
     skip_release_token = -1;
-    // A pending mouse action (term.mouse_state < 0) cannot stem from the
-    // swallowed focus click, which never reached term_mouse_click; it is
-    // stale state from a lost release.  Deliver this release to finish it
-    // rather than stranding the terminal in selection mode.
-    if (term.mouse_state >= 0) {
+    // A pending selection (MS_SEL_*) cannot stem from the swallowed focus
+    // click, which never reached term_mouse_click; it is stale state from a
+    // lost release.  Deliver this release to finish it rather than stranding
+    // the terminal in selection mode.  Other pending actions (MS_COPYING,
+    // MS_PASTING, MS_OPENING - also negative) must not be triggered by a
+    // mere focus click; keep swallowing the release for those.
+    if (!(term.mouse_state < 0 && term.mouse_state >= MS_SEL_LINE)) {
       return;
     }
   }
