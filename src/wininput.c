@@ -1,3 +1,4 @@
+// Model-output: Claude Fable 5
 // wininput.c (part of mintty)
 // Copyright 2008-23 Andy Koppe, 2015-2026 Thomas Wolff
 // Licensed under the terms of the GNU General Public License v3 or later.
@@ -1108,7 +1109,13 @@ win_mouse_release(mouse_button b, LPARAM lp)
 
   if (b == skip_release_token) {
     skip_release_token = -1;
-    return;
+    // A pending mouse action (term.mouse_state < 0) cannot stem from the
+    // swallowed focus click, which never reached term_mouse_click; it is
+    // stale state from a lost release.  Deliver this release to finish it
+    // rather than stranding the terminal in selection mode.
+    if (term.mouse_state >= 0) {
+      return;
+    }
   }
 
   term_mouse_release(b, get_mods(), get_mouse_pos(lp));
@@ -1145,15 +1152,27 @@ win_mouse_move(bool nc, LPARAM lp)
   if (nc || (p.x == last_pos.x && p.y == last_pos.y && p.r == last_pos.r))
     return;
   if (last_skipped && last_button == MBT_LEFT && mouse_state) {
-    // allow focus-selection if distance spanned 
-    // is large enough or with sufficient delay (#717)
-    uint dist = sqrt(sqr(p.x - last_click_pos.x) + sqr(p.y - last_click_pos.y));
-    uint diff = GetMessageTime() - last_skipped_time;
-    //printf("focus move %d %d\n", dist, diff);
-    if (dist * diff > 999) {
-      term_mouse_click(last_button, last_mods, last_click_pos, 1);
+    if (!(GetKeyState(VK_LBUTTON) & 0x8000)) {
+      // The WM_LBUTTONUP of the swallowed focus click was lost: a swallowed
+      // click never reaches term_mouse_click, so no capture is held, and a
+      // release outside the window goes elsewhere.  Drop the stale state;
+      // otherwise this mere hover would pass the dist * diff threshold below
+      // (diff having grown huge) and start a selection with no button held.
+      mouse_state = false;
       last_skipped = false;
       skip_release_token = -1;
+    }
+    else {
+      // allow focus-selection if distance spanned
+      // is large enough or with sufficient delay (#717)
+      uint dist = sqrt(sqr(p.x - last_click_pos.x) + sqr(p.y - last_click_pos.y));
+      uint diff = GetMessageTime() - last_skipped_time;
+      //printf("focus move %d %d\n", dist, diff);
+      if (dist * diff > 999) {
+        term_mouse_click(last_button, last_mods, last_click_pos, 1);
+        last_skipped = false;
+        skip_release_token = -1;
+      }
     }
   }
 
