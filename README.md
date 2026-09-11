@@ -4,7 +4,7 @@ Memory usage has increased due to rendering to a 32bpp DIB.
 
 The hidden Bloom effect has been removed.
 
-Use at your own risk.
+I run this all the time and it seems to be fine, but: use at your own risk.
 
 <hr>
 
