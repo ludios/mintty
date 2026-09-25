@@ -1,3 +1,4 @@
+// Model-output: Claude Opus 5.5
 // wintext.c (part of mintty)
 // Copyright 2008-22 Andy Koppe, 2015-2026 Thomas Wolff
 // Adapted from code from PuTTY-0.60 by Simon Tatham and team.
@@ -6617,9 +6618,12 @@ win_char_width_uncached(xchar c, cattrflags attr)
 /*
  * Memoising wrapper around win_char_width_uncached; same contract:
  * return the width in character cells of code point c when rendered
- * with the font family/style selected by attributes attr (usually 1
- * or 2; 0 if width enquiry failed). Results are cached until the next
- * font (re)initialisation flushes the cache (win_init_fontfamily).
+ * with the font family/style selected by attributes attr. Usually 1
+ * or 2; 0 for glyphs narrower than half a cell, for characters that
+ * are neither enquired nor measured (non-BMP letters, e.g. U+1D400),
+ * and if the width enquiry failed. All results, including 0, are
+ * cached until the next font (re)initialisation flushes the cache
+ * (win_init_fontfamily).
  */
 int
 win_char_width(xchar c, cattrflags attr)
@@ -6649,11 +6653,7 @@ win_char_width(xchar c, cattrflags attr)
   long long perf_t0 = mintty_perf_ticks();
   wid = win_char_width_uncached(c, attr);
   PERF_ADD_TICKS(wcw_uncached_ticks, mintty_perf_ticks() - perf_t0);
-  if (wid != 0) {
-    // width 0 signals a failed width enquiry; do not memoise failures,
-    // so they keep being retried per call as before
-    wcw_store(key, wid);
-  }
+  wcw_store(key, wid);
   return wid;
 }
 
