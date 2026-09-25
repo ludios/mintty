@@ -1,3 +1,6 @@
+// Model-output: ChatGPT 5.5 Pro
+// Model-output: ChatGPT 5.5 Thinking
+// Model-output: Claude Fable 5
 // Model-output: Claude Opus 5.5
 // wintext.c (part of mintty)
 // Copyright 2008-22 Andy Koppe, 2015-2026 Thomas Wolff
@@ -657,16 +660,16 @@ static struct wcw_entry wcw_cache[WCW_CACHE_SIZE];
  * Build the cache key for character c (a Unicode code point <= 0x10FFFF)
  * under character attributes attr. The key combines everything the
  * uncached function derives from its arguments: the code point, the
- * font family index (clamped as in win_char_width), and the bold/italic
- * style bits as resolved by font4(). Returns a non-zero 27-bit key
- * (c + 1 keeps 0 available as the empty-slot marker).
+ * font family index (clamped as in win_char_width_uncached), and the
+ * bold/italic style bits as resolved by font4(). Returns a non-zero
+ * 27-bit key (c + 1 keeps 0 available as the empty-slot marker).
  */
 static uint
 wcw_key(xchar c, cattrflags attr)
 {
   uint findex = (attr & FONTFAM_MASK) >> ATTR_FONTFAM_SHIFT;
   if (findex > 10) {
-    findex = 0;  // same clamping as in win_char_width
+    findex = 0;  // same clamping as in win_char_width_uncached
   }
   struct fontfam * ff = &fontfamilies[findex];
   uint bold = ((ff->bold_mode == BOLD_FONT) && (attr & ATTR_BOLD)) ? 1 : 0;
@@ -6260,8 +6263,9 @@ int win_char_width(xchar, cattrflags);
      (of a CJK ambiguous-wide font such as BatangChe) to normal width 
      if desired.
    * also whether to expand a normal width character if expected wide
-   This is the uncached implementation; win_char_width below wraps it 
+   This is the uncached implementation; win_char_width below wraps it
    with a memoisation cache (see the wcw_* functions further above).
+   Returns -1 if the width enquiry failed.
  */
 static int
 win_char_width_uncached(xchar c, cattrflags attr)
@@ -6344,7 +6348,7 @@ win_char_width_uncached(xchar c, cattrflags attr)
 #endif
     if (!ok) {
       ReleaseDC(wnd, dc);
-      return 0;
+      return -1;
     }
 
     // report char as wide if its width is more than 1½ cells;
@@ -6611,14 +6615,14 @@ win_char_width_uncached(xchar c, cattrflags attr)
 }
 
 /*
- * Memoising wrapper around win_char_width_uncached; same contract:
- * return the width in character cells of code point c when rendered
- * with the font family/style selected by attributes attr. Usually 1
- * or 2; 0 for glyphs narrower than half a cell, for characters that
- * are neither enquired nor measured (non-BMP letters, e.g. U+1D400),
- * and if the width enquiry failed. All results, including 0, are
- * cached until the next font (re)initialisation flushes the cache
- * (win_init_fontfamily).
+ * Memoising wrapper around win_char_width_uncached: return the width
+ * in character cells of code point c when rendered with the font
+ * family/style selected by attributes attr. Usually 1 or 2; 0 for a
+ * letter (bidi class L) that is at most half a cell wide or outside
+ * the BMP (not enquired, e.g. U+1D400), and 0 if the width enquiry
+ * failed. All results except failures are cached until the next font
+ * (re)initialisation flushes the cache (win_init_fontfamily);
+ * failures are retried on the next call.
  */
 int
 win_char_width(xchar c, cattrflags attr)
@@ -6636,6 +6640,7 @@ win_char_width(xchar c, cattrflags attr)
     long long perf_t0 = mintty_perf_ticks();
     int wid = win_char_width_uncached(c, attr);
     PERF_ADD_TICKS(wcw_uncached_ticks, mintty_perf_ticks() - perf_t0);
+    assert(wid >= 0);  // only BMP width enquiries can fail
     return wid;
   }
   uint key = wcw_key(c, attr);
@@ -6648,6 +6653,12 @@ win_char_width(xchar c, cattrflags attr)
   long long perf_t0 = mintty_perf_ticks();
   wid = win_char_width_uncached(c, attr);
   PERF_ADD_TICKS(wcw_uncached_ticks, mintty_perf_ticks() - perf_t0);
+  if (wid < 0) {
+    // failures may be transient (e.g. GDI resources exhausted), so
+    // don't memoise them
+    PERF_COUNT(wcw_enquiry_failed, 1);
+    return 0;
+  }
   wcw_store(key, wid);
   return wid;
 }

@@ -192,6 +192,7 @@ struct mintty_perf_frame {
   uint64_t wcw_out_of_range;
   uint64_t wcw_cache_hits;
   uint64_t wcw_cache_misses;
+  uint64_t wcw_enquiry_failed;
   uint64_t wcw_uncached_ticks;
 
   uint64_t scroll_calls;

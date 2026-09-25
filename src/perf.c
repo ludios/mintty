@@ -298,6 +298,7 @@ mintty_perf_emit_frame(void)
   PUT_U64(wcw_out_of_range);
   PUT_U64(wcw_cache_hits);
   PUT_U64(wcw_cache_misses);
+  PUT_U64(wcw_enquiry_failed);
   PUT_US(wcw_uncached_ticks);
 
   PUT_U64(scroll_calls);
