@@ -158,7 +158,6 @@ mintty_perf_emit_frame(void)
   PUT_U64(buffer_recreate);
   PUT_U64(buffer_stale_full_repaint);
   PUT_U64(buffer_reject_disabled);
-  PUT_U64(buffer_reject_tek);
   PUT_U64(buffer_reject_horclip);
   PUT_U64(buffer_reject_imgs);
   PUT_U64(buffer_reject_size);

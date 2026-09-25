@@ -52,7 +52,6 @@ struct mintty_perf_frame {
   uint64_t buffer_recreate;
   uint64_t buffer_stale_full_repaint;
   uint64_t buffer_reject_disabled;
-  uint64_t buffer_reject_tek;
   uint64_t buffer_reject_horclip;
   uint64_t buffer_reject_imgs;
   uint64_t buffer_reject_size;

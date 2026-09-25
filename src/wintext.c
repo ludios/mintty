@@ -1780,20 +1780,19 @@ show_curchar_info(char tag)
  * Whether display updates can currently be routed through the back
  * buffer. Returns false for the modes that paint to the window outside
  * the global dc, which the buffer cannot capture:
- * - Tektronix mode paints via its own window DC;
  * - sixel images are painted directly by winimgs_paint with repainting
  *   suppression, so blitting buffer content over them would erase them;
  * - horizontal view scrolling applies a world transform to the paint
  *   target which does not carry over to a blitted buffer.
+ * Must not be called in Tektronix mode, which paints via its own window
+ * DC instead of the terminal paint path.
  */
 static bool
 paint_buffer_usable(void)
 {
-  if (!cfg.display_buffering || tek_mode) {
-    if (!cfg.display_buffering)
-      PERF_COUNT(buffer_reject_disabled, 1);
-    if (tek_mode)
-      PERF_COUNT(buffer_reject_tek, 1);
+  assert(!tek_mode);
+  if (!cfg.display_buffering) {
+    PERF_COUNT(buffer_reject_disabled, 1);
     return false;
   }
   if (horclip() != 0) {
