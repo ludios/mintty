@@ -3589,21 +3589,21 @@ selfdraw_get_clip_rgn(int left, int top, int right, int bottom)
   return selfdraw_clip_rgn;
 }
 
-static int
-perf_selfdraw_fillrect(HDC hdc, const RECT *rect, colour c)
+/*
+ * win_fill_rect of rect with colour c (on the global dc), counted and
+ * timed as a self-drawn graphics fill.
+ */
+static void
+perf_selfdraw_fillrect(const RECT *rect, colour c)
 {
   int width = rect->right - rect->left;
   int height = rect->bottom - rect->top;
   long long perf_t0 = mintty_perf_ticks();
-  (void)hdc;  // fills target the global dc, see win_fill_rect
-  assert(hdc == dc);
   win_fill_rect(rect, c);
-  int res = 1;
   PERF_COUNT(win_text_selfdraw_fillrect_calls, 1);
   if (width > 0 && height > 0)
     PERF_COUNT(win_text_selfdraw_fillrect_pixels, (uint64_t)width * (uint64_t)height);
   PERF_ADD_TICKS(win_text_selfdraw_fillrect_ticks, mintty_perf_ticks() - perf_t0);
-  return res;
 }
 
 
@@ -5243,7 +5243,7 @@ skip_drawing:;
       }
       //printf("25XX >%d%%%d %d%%%d %d%%%d %d%%%d\n", cl, dl, ct, dt, cr, dr, cb, db);
       //printf("Rect %d %d %d %d\n", xi + cl_, y0 + ct_, xi + cr_, y0 + cb_);
-      perf_selfdraw_fillrect(dc, &(RECT){xi + cl_, y0 + ct_, xi + cr_, y0 + cb_}, c);
+      perf_selfdraw_fillrect(&(RECT){xi + cl_, y0 + ct_, xi + cr_, y0 + cb_}, c);
       PERF_COUNT(win_text_selfdraw_rect_ops, 1);
       if (dl)
         linedraw(cl, ct, cl, cb, colmix(8 - dl));
@@ -5366,7 +5366,7 @@ skip_drawing:;
             y2 += w - w / 2;
           }
           //printf("fillrect %d/%d..%d/%d\n", x1, y1, x2, y2);
-          perf_selfdraw_fillrect(dc, &(RECT){xi + x1, y0 + y1, xi + x2, y0 + y2}, fg);
+          perf_selfdraw_fillrect(&(RECT){xi + x1, y0 + y1, xi + x2, y0 + y2}, fg);
           PERF_COUNT(win_text_selfdraw_rect_ops, 1);
         }
         else {
@@ -5461,7 +5461,7 @@ skip_drawing:;
     {
       int top = ymid - width / 2;
       int bottom = ymid + width - width / 2;
-      perf_selfdraw_fillrect(dc, &(RECT){xi, y0 + top, xi + cells * char_width, y0 + bottom}, fg);
+      perf_selfdraw_fillrect(&(RECT){xi, y0 + top, xi + cells * char_width, y0 + bottom}, fg);
       PERF_COUNT(win_text_selfdraw_rect_ops, 1);
     }
     void boxhline_run(bool heavy, int cells)
@@ -5821,7 +5821,7 @@ skip_drawing:;
           // this does not give us sufficient colour control
           InvertRect(dc, &(RECT){xx, y, xx + caret_width, y + cell_height});
 #else
-          perf_selfdraw_fillrect(dc, &(RECT){xx, y, xx + caret_width, y + cell_height}, _cc);
+          perf_selfdraw_fillrect(&(RECT){xx, y, xx + caret_width, y + cell_height}, _cc);
           PERF_COUNT(win_text_selfdraw_rect_ops, 1);
 #endif
 #endif
