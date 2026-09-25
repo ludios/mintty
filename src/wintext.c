@@ -1782,24 +1782,17 @@ show_curchar_info(char tag)
 
 
 /*
- * Whether display updates can currently be routed through the back
- * buffer. Returns false for the modes that paint to the window outside
- * the global dc, which the buffer cannot capture:
+ * Whether the current display state allows routing display updates
+ * through the back buffer. Returns false in the modes whose output a
+ * blitted buffer cannot reproduce:
  * - sixel images are painted directly by winimgs_paint with repainting
  *   suppression, so blitting buffer content over them would erase them;
  * - horizontal view scrolling applies a world transform to the paint
  *   target which does not carry over to a blitted buffer.
- * Must not be called in Tektronix mode, which paints via its own window
- * DC instead of the terminal paint path.
  */
 static bool
 paint_buffer_usable(void)
 {
-  assert(!tek_mode);
-  if (!cfg.display_buffering) {
-    PERF_COUNT(buffer_reject_disabled, 1);
-    return false;
-  }
   if (horclip() != 0) {
     PERF_COUNT(buffer_reject_horclip, 1);
     return false;
@@ -1838,6 +1831,8 @@ paint_buffer_drop(void)
 /*
  * Route subsequent painting via the global dc into the back buffer.
  * The global dc must hold the window target (from GetDC or BeginPaint).
+ * Must not be called in Tektronix mode, which paints via its own window
+ * DC (tek_paint) instead.
  * Returns true if buffering was engaged; win_paint_buffer_end must then
  * be called after term_paint. Returns false to paint directly to the
  * window as without buffering.
@@ -1847,16 +1842,19 @@ static void selfdraw_cache_maintain(void);
 static bool
 win_paint_buffer_begin(void)
 {
+  assert(!tek_mode);
   // reset overflowed drawn-graphics caches at this safe point
   selfdraw_cache_maintain();
   PERF_COUNT(buffer_begin_calls, 1);
+  if (!cfg.display_buffering) {
+    PERF_COUNT(buffer_reject_disabled, 1);
+    paint_buffer_drop();  // free the buffer when disabled; marks it stale
+    return false;
+  }
   if (!paint_buffer_usable()) {
-    paint_buf_stale = true;  // direct painting bypasses the buffer
-    if (!cfg.display_buffering) {
-      // free the buffer when disabled (but keep it across the dynamic
-      // bypasses, which are usually transient)
-      paint_buffer_drop();
-    }
+    // direct painting bypasses the buffer; keep it though, as these
+    // bypasses are usually transient
+    paint_buf_stale = true;
     return false;
   }
   RECT cr;
