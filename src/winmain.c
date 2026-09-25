@@ -7821,51 +7821,12 @@ static int dynfonts = 0;
     // provide wslbridge-backend in a reachable place for invocation
     bool copyfile(char * fn, char * tn, bool overwrite)
     {
-# ifdef copyfile_posix
-      int f = open(fn, O_BINARY | O_RDONLY);
-      if (f < 0)
-        return false;
-      int t = open(tn, O_CREAT | O_WRONLY | O_BINARY |
-                   (overwrite ? O_TRUNC : O_EXCL), 0755);
-      if (t < 0) {
-        close(f);
-        return false;
-      }
-
-      char buf[1024];
-      ssize_t len;
-      bool res = true;
-      while ((len = read(f, buf, sizeof buf)) > 0) {
-        char * p = buf;
-        while (len > 0) {
-          ssize_t written = write(t, p, len);
-          if (written > 0) {
-            p += written;
-            len -= written;
-          }
-          else if (written < 0 && errno == EINTR)
-            continue;
-          else {
-            res = false;
-            break;
-          }
-        }
-        if (!res)
-          break;
-      }
-      if (len < 0)
-        res = false;
-      close(f);
-      close(t);
-      return res;
-# else
       wchar * src = path_posix_to_win_w(fn);
       wchar * dst = path_posix_to_win_w(tn);
       bool ok = CopyFileW(src, dst, !overwrite);
       free(dst);
       free(src);
       return ok;
-# endif
     }
 
     if (wsltty_appx && wslbridge && lappdata && *lappdata) {
