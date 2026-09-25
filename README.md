@@ -1,4 +1,4 @@
-This is an fork of https://github.com/mintty/mintty where the rendering has been significantly optimized via a lot of iterations with Claude Fable 5 and ChatGPT 5.5 Thinking + Pro.
+This is a fork of https://github.com/mintty/mintty where the rendering has been significantly optimized via a lot of iterations with Claude Fable 5 and ChatGPT 5.5 Thinking + Pro.
 
 Memory usage has increased due to rendering to a 32bpp DIB.
 
