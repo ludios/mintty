@@ -6894,6 +6894,26 @@ win_reset_colours(void)
 }
 
 
+/*
+ * Fill the padding around the terminal cell area on pdc with solid
+ * colour c, within paint area *r minus the tab bar and search bar.
+ * pdc must not have a clip region set, and is left without one.
+ */
+static void
+paint_padding(HDC pdc, const RECT * r, colour c)
+{
+  // mask inner area not to pad with background
+  ExcludeClipRect(pdc, PADDING,
+                       OFFSET + PADDING,
+                       PADDING + cell_width * term.cols,
+                       OFFSET + PADDING + cell_height * term_allrows);
+  int sy = win_search_visible() ? SEARCHBAR_HEIGHT : 0;
+  RECT fill = {r->left, max(r->top, OFFSET), r->right, r->bottom - sy};
+  SetDCBrushColor(pdc, c);
+  FillRect(pdc, &fill, GetStockObject(DC_BRUSH));
+  SelectClipRgn(pdc, 0);
+}
+
 #define dont_debug_padding_background
 
 void
@@ -6978,29 +6998,12 @@ win_paint(void)
     // visualize background for testing
     bg_colour = RGB(222, 0, 0);
 #endif
-    HBRUSH oldbrush = SelectObject(dc, CreateSolidBrush(bg_colour));
-    HPEN oldpen = SelectObject(dc, CreatePen(PS_SOLID, 0, bg_colour));
-
-    // unclear purpose
-    IntersectClipRect(dc, p.rcPaint.left, p.rcPaint.top,
-                          p.rcPaint.right, p.rcPaint.bottom);
-
-    // mask inner area not to pad with background
-    ExcludeClipRect(dc, PADDING,
-                        OFFSET + PADDING,
-                        PADDING + cell_width * term.cols,
-                        OFFSET + PADDING + cell_height * term_allrows);
-
-    // fill outer padding area with background
-    int sy = win_search_visible() ? SEARCHBAR_HEIGHT : 0;
-    Rectangle(dc, p.rcPaint.left, max(p.rcPaint.top, OFFSET),
-                  p.rcPaint.right, p.rcPaint.bottom - sy);
-
-    DeleteObject(SelectObject(dc, oldbrush));
-    DeleteObject(SelectObject(dc, oldpen));
-    // Padding was painted directly after any buffered terminal update.
-    // Seed it back into the buffer before the next full-width row blit.
-    paint_buf_stale = true;
+    paint_padding(dc, &p.rcPaint, bg_colour);
+    // a current back buffer needs the same padding, or its next
+    // full-width row blit brings back the pixels just overwritten
+    if (paint_buf_dc && !paint_buf_stale) {
+      paint_padding(paint_buf_dc, &p.rcPaint, bg_colour);
+    }
 #ifdef debug_padding_background
     // show visualized background for testing
     usleep(900000);
