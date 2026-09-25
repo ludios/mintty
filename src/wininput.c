@@ -1,4 +1,5 @@
 // Model-output: Claude Fable 5
+// Model-output: Claude Opus 5.5
 // wininput.c (part of mintty)
 // Copyright 2008-23 Andy Koppe, 2015-2026 Thomas Wolff
 // Licensed under the terms of the GNU General Public License v3 or later.
@@ -1109,15 +1110,14 @@ win_mouse_release(mouse_button b, LPARAM lp)
 
   if (b == skip_release_token) {
     skip_release_token = -1;
-    // A pending selection (MS_SEL_*) cannot stem from the swallowed focus
-    // click, which never reached term_mouse_click; it is stale state from a
-    // lost release.  Deliver this release to finish it rather than stranding
-    // the terminal in selection mode.  Other pending actions (MS_COPYING,
-    // MS_PASTING, MS_OPENING - also negative) must not be triggered by a
-    // mere focus click; keep swallowing the release for those.
-    if (!(term.mouse_state < 0 && term.mouse_state >= MS_SEL_LINE)) {
-      return;
-    }
+    // The release of a swallowed focus click must stay inert, so it doesn't
+    // reach term_mouse_release.  A selection drag in progress cannot stem
+    // from that click, which never reached term_mouse_click; it is stale
+    // state from a lost release.  End it without acting on it, rather than
+    // stranding the terminal in selection mode.
+    term_mouse_abandon_selection();
+    ReleaseCapture();
+    return;
   }
 
   term_mouse_release(b, get_mods(), get_mouse_pos(lp));

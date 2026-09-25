@@ -1,3 +1,4 @@
+// Model-output: Claude Opus 5.5
 // termmouse.c (part of mintty)
 // Copyright 2008-2023 Andy Koppe, 2017-2025 Thomas Wolff
 // Based on code from PuTTY-0.60 by Simon Tatham and team.
@@ -805,6 +806,24 @@ term_mouse_release(mouse_button b, mod_keys mods, pos p)
           send_mouse_event(MA_RELEASE, b, mods, box_pos(p));
       }
   }
+}
+
+/*
+ * End a selection drag without acting on it the way term_mouse_release()
+ * does: no copy-on-select, no cursor placement, no link opening.  The
+ * selection itself stays highlighted.  Does nothing if no selection drag is
+ * in progress.
+ */
+void
+term_mouse_abandon_selection(void)
+{
+  if (!term_selecting()) {
+    return;
+  }
+
+  term.mouse_state = 0;
+  // Flush any output held back during selection.
+  term_flush();
 }
 
 static void
