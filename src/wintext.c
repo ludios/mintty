@@ -1332,6 +1332,8 @@ static bool ime_open_native = false;
  * (buffering off or bypassed), the buffer goes stale relative to the
  * displines cache, which paint_buf_stale records so that the next
  * buffered frame repaints everything into the buffer first.
+ * Painting done on the window between buffered frames (the WM_PAINT
+ * padding fill) is repeated on a current buffer to keep it in step.
  */
 static HDC     paint_buf_dc = 0;        // memory DC of the back buffer
 static HBITMAP paint_buf_bm = 0;        // bitmap selected into paint_buf_dc
@@ -6906,21 +6908,22 @@ win_reset_colours(void)
 
 /*
  * Fill the padding around the terminal cell area on pdc with solid
- * colour c, within paint area *r minus the tab bar and search bar.
+ * colour c, within *area, which may be empty.
  * pdc must not have a clip region set, and is left without one.
  */
 static void
-paint_padding(HDC pdc, const RECT * r, colour c)
+paint_padding(HDC pdc, const RECT * area, colour c)
 {
+  if (area->left >= area->right || area->top >= area->bottom) {
+    return;
+  }
   // mask inner area not to pad with background
   ExcludeClipRect(pdc, PADDING,
                        OFFSET + PADDING,
                        PADDING + cell_width * term.cols,
                        OFFSET + PADDING + cell_height * term_allrows);
-  int sy = win_search_visible() ? SEARCHBAR_HEIGHT : 0;
-  RECT fill = {r->left, max(r->top, OFFSET), r->right, r->bottom - sy};
   SetDCBrushColor(pdc, c);
-  FillRect(pdc, &fill, GetStockObject(DC_BRUSH));
+  FillRect(pdc, area, GetStockObject(DC_BRUSH));
   SelectClipRgn(pdc, 0);
 }
 
@@ -7008,11 +7011,18 @@ win_paint(void)
     // visualize background for testing
     bg_colour = RGB(222, 0, 0);
 #endif
-    paint_padding(dc, &p.rcPaint, bg_colour);
+    // the paint area within the terminal viewport, i.e. between the
+    // tab bar and the search bar
+    RECT cr;
+    GetClientRect(wnd, &cr);
+    int sy = win_search_visible() ? SEARCHBAR_HEIGHT : 0;
+    RECT area = {p.rcPaint.left,  max(p.rcPaint.top, OFFSET),
+                 p.rcPaint.right, min(p.rcPaint.bottom, cr.bottom - sy)};
+    paint_padding(dc, &area, bg_colour);
     // a current back buffer needs the same padding, or its next
     // full-width row blit brings back the pixels just overwritten
     if (paint_buf_dc && !paint_buf_stale) {
-      paint_padding(paint_buf_dc, &p.rcPaint, bg_colour);
+      paint_padding(paint_buf_dc, &area, bg_colour);
     }
 #ifdef debug_padding_background
     // show visualized background for testing
