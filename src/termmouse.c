@@ -809,13 +809,13 @@ term_mouse_release(mouse_button b, mod_keys mods, pos p)
 }
 
 /*
- * End a selection drag without acting on it the way term_mouse_release()
- * does: no copy-on-select, no cursor placement, no link opening.  The
- * selection itself stays highlighted.  Does nothing if no selection drag is
- * in progress.
+ * Stop selecting (see term_selecting()) without acting on it the way
+ * term_mouse_release() does: no copy-on-select, no cursor placement, no link
+ * opening.  The selection itself stays highlighted.  Other pending mouse
+ * actions (MS_COPYING, MS_PASTING, MS_OPENING) are left alone.
  */
 void
-term_mouse_abandon_selection(void)
+term_mouse_abandon_selecting(void)
 {
   if (!term_selecting()) {
     return;

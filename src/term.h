@@ -717,7 +717,7 @@ extern void term_reset(bool full);
 extern void term_clear_scrollback(void);
 extern bool term_mouse_click(mouse_button, mod_keys, pos, int count);
 extern void term_mouse_release(mouse_button, mod_keys, pos);
-extern void term_mouse_abandon_selection(void);
+extern void term_mouse_abandon_selecting(void);
 extern void term_mouse_move(mod_keys, pos);
 extern void term_mouse_wheel(bool horizontal, int delta, int lines_per_notch, mod_keys, pos);
 extern void term_select_all(void);

@@ -1111,16 +1111,15 @@ win_mouse_release(mouse_button b, LPARAM lp)
   if (b == skip_release_token) {
     skip_release_token = -1;
     // The release of a swallowed focus click must stay inert, so it doesn't
-    // reach term_mouse_release.  A selection drag in progress cannot stem
-    // from that click, which never reached term_mouse_click; it is stale
-    // state from a lost release.  End it without acting on it, rather than
+    // reach term_mouse_release.  A selection in progress cannot stem from
+    // that click, which never reached term_mouse_click; it is stale state
+    // from a lost release.  End it without acting on it, rather than
     // stranding the terminal in selection mode.
-    term_mouse_abandon_selection();
-    ReleaseCapture();
-    return;
+    term_mouse_abandon_selecting();
   }
-
-  term_mouse_release(b, get_mods(), get_mouse_pos(lp));
+  else {
+    term_mouse_release(b, get_mods(), get_mouse_pos(lp));
+  }
   ReleaseCapture();
   switch (b) {
     when MBT_RIGHT:
