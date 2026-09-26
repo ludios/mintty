@@ -1,3 +1,4 @@
+// Model-output: Claude Opus 5.5
 // winmain.c (part of mintty)
 // Copyright 2008-13 Andy Koppe, 2015-2026 Thomas Wolff
 // Based on code from PuTTY-0.60 by Simon Tatham and team.
@@ -3971,6 +3972,7 @@ win_reconfig(void)
     new_cfg.font.isbold != cfg.font.isbold ||
     new_cfg.bold_as_font != cfg.bold_as_font ||
     new_cfg.bold_as_colour != cfg.bold_as_colour ||
+    // not a font attribute, but cached character widths depend on it
     new_cfg.font_render != cfg.font_render ||
     new_cfg.font_smoothing != cfg.font_smoothing;
 
