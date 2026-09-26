@@ -638,8 +638,7 @@ check_font(HDC dc, struct fontfam * ff)
  * family/style derived from the attributes, and the current font
  * instances/metrics and the configured text renderer, so they can be
  * cached until fonts are (re)initialised (win_init_fontfamily), which
- * covers font selection, zooming and DPI changes. FontRender is part of
- * the key because it can be changed without recreating the fonts.
+ * covers font selection, renderer changes, zooming and DPI changes.
  * The cache is a fixed-size open-addressing hash table; it is a cache,
  * not a map: on collision overflow an old entry is simply evicted.
  */
@@ -659,8 +658,7 @@ static struct wcw_entry wcw_cache[WCW_CACHE_SIZE];
  * under character attributes attr. The key combines everything the
  * uncached function derives from its arguments: the code point, the
  * font family index (clamped as in win_char_width), and the bold/italic
- * style bits as resolved by font4(), and the text renderer. Returns a
- * non-zero 29-bit key
+ * style bits as resolved by font4(). Returns a non-zero 27-bit key
  * (c + 1 keeps 0 available as the empty-slot marker).
  */
 static uint
@@ -673,9 +671,7 @@ wcw_key(xchar c, cattrflags attr)
   struct fontfam * ff = &fontfamilies[findex];
   uint bold = ((ff->bold_mode == BOLD_FONT) && (attr & ATTR_BOLD)) ? 1 : 0;
   uint ital = (attr & ATTR_ITALIC)                                 ? 1 : 0;
-  uint renderer = (uint)cfg.font_render & 0x3u;
-  return (c + 1) | findex << 21 | bold << 25 | ital << 26
-                 | renderer << 27;
+  return (c + 1) | findex << 21 | bold << 25 | ital << 26;
 }
 
 /*
